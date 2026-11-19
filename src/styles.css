@@ -11,6 +11,11 @@ h3 { font-size: 14px; margin: 16px 0 6px; color: #475569; }
 .err { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; padding: 8px 12px; border-radius: 6px; }
 
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.tabs { display: flex; gap: 4px; margin-top: 14px; }
+button.tab { border-radius: 6px 6px 0 0; border-bottom-color: transparent; }
+button.tab.on { background: #0f766e; color: #fff; border-color: #0f766e; }
+input, select { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+label { font-size: 12px; color: #475569; display: inline-flex; flex-direction: column; gap: 2px; }
 button { font: inherit; font-size: 13px; padding: 6px 12px; border: 1px solid #cbd5e1; background: #fff; border-radius: 6px; cursor: pointer; }
 button:hover:not(:disabled) { background: #f1f5f9; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }

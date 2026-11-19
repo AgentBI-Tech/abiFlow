@@ -97,6 +97,31 @@ export type SchedulerTickResult = {
   errors: string[];
 };
 
+export type ToolRow = {
+  id: string;
+  title: string;
+  server: string;
+  risk: string;
+  plane: string;
+  requiresApproval: boolean;
+  irreversible: boolean;
+  visible: boolean;
+};
+
+export type ToolGrantRow = {
+  toolId: string;
+  mode: string;
+  allowed: boolean;
+  planes: string[];
+};
+
+export type CredentialRef = {
+  refId: string;
+  storageKey: string;
+  provider: string;
+  label: string | null;
+};
+
 export type AppError = { code: string; message: string };
 
 export function dashboardGet(): Promise<DashboardData> {
@@ -122,6 +147,24 @@ export function demoInstall(): Promise<string> {
 }
 export function sopSetEnabled(id: string, enabled: boolean): Promise<void> {
   return invoke("sop_set_enabled", { id, enabled });
+}
+export function toolList(role: string, mode: string): Promise<ToolRow[]> {
+  return invoke("tool_list", { role, mode });
+}
+export function toolGrantList(): Promise<ToolGrantRow[]> {
+  return invoke("tool_grant_list");
+}
+export function toolGrantSet(toolId: string, mode: string, allowed: boolean, planes: string[]): Promise<void> {
+  return invoke("tool_grant_set", { payload: { toolId, mode, allowed, planes } });
+}
+export function credentialList(): Promise<CredentialRef[]> {
+  return invoke("credential_list");
+}
+export function credentialSet(refId: string, provider: string, label: string | null, value: string): Promise<void> {
+  return invoke("credential_set", { payload: { refId, provider, label, value } });
+}
+export function credentialRemove(refId: string): Promise<void> {
+  return invoke("credential_remove", { refId });
 }
 
 export function errMessage(e: unknown): string {

@@ -4,6 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
 use crate::domain::audit::redact_value;
+use crate::domain::gateway::{self, Actor, Decision, Mode};
 use crate::domain::sop::{eval_condition, NodeType, SopDefinition};
 use crate::infra::store::{self, GateState};
 use crate::models::{new_id, now_secs, AppError, AppResult};
@@ -211,18 +212,30 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner) -> AppRe
                 let step_id = store::step_id_for_node(conn, run_id, &current)?
                     .ok_or_else(|| AppError::InvalidInput("缺 tool step 行".into()))?;
 
-                // 不变量 2/3：high 或 irreversible 必须先有人工批准。
-                let (risk, irreversible) = store::tool_risk(conn, tool)?;
-                let need_gate = risk == "high" || irreversible;
-                if need_gate
+                // v0.3：统一走 gateway 授权（Allow/Deny/NeedGate）；不变量 2/3 在此集中判定。
+                let spec = store::tool_spec(conn, tool)?;
+                let mode = Mode::parse(&run.mode)?;
+                let ctx = store::call_ctx(conn, run_id, Actor::agent(), mode, tool)?;
+                let decision = gateway::authorize(&spec, &ctx);
+                match decision {
+                    Decision::Deny => {
+                        return Err(AppError::ToolDenied(format!(
+                            "{}（{}）", tool, gateway::deny_reason(&spec, &ctx)
+                        )))
+                    }
+                    Decision::NeedGate | Decision::Allow => {}
+                }
+                // irreversible/high/requiresApproval → NeedGate，且必须先有人工批准（不变量 2/3）。
+                if decision == Decision::NeedGate
                     && store::gate_state_for_step(conn, &step_id)? != GateState::Approved
                 {
                     if store::gate_state_for_step(conn, &step_id)? == GateState::None {
+                        let reason = if spec.irreversible { "irreversible" } else { "high_risk" };
                         store::insert_gate(
                             conn,
                             run_id,
                             &step_id,
-                            if irreversible { "irreversible" } else { "high_risk" },
+                            reason,
                             &format!("工具 {} 需人工批准后才能调用", tool),
                             None,
                         )?;
@@ -392,10 +405,21 @@ pub fn demo_install(conn: &Connection) -> AppResult<String> {
     // 工具表：注册只读 demo 工具。
     conn.execute(
         "INSERT OR IGNORE INTO tools(id,server,command,title,risk,scope_json,enabled) \
-         VALUES('demo:check_anomalies','builtin','demo','异常巡检（演示）','low','{\"read_only\":true}',1)",
+         VALUES('demo:check_anomalies','builtin','demo','异常巡检（演示）','low','{\"read_only\":true,\"plane\":\"public\"}',1)",
         [],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+
+    // v0.3：为 demo 工具在三种模式都种授权（public/content 面），否则 gateway 判 Deny。
+    for mode in [Mode::Plan, Mode::Build, Mode::Review] {
+        store::upsert_tool_grant(
+            conn,
+            "demo:check_anomalies",
+            mode,
+            true,
+            &["public".into(), "content".into()],
+        )?;
+    }
 
     let definition = json!({
         "version": 1,

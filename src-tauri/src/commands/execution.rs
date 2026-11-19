@@ -3,14 +3,17 @@ use std::path::PathBuf;
 use serde_json::json;
 use tauri::Manager;
 
+use crate::AppKeyStore;
 use crate::domain::executor::{self, DemoTools};
+use crate::domain::gateway::Mode;
 use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
 use crate::infra::{db, store};
 use crate::models::{
     AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunControlPayload,
     RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
-    SopRow, SopUpsertPayload, SopUpsertResult,
+    SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
+    CredentialSetPayload, CredentialRef,
 };
 
 pub(crate) fn db_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
@@ -167,4 +170,106 @@ pub fn scheduler_tick(app: tauri::AppHandle) -> AppResult<SchedulerTickResult> {
 pub fn demo_install(app: tauri::AppHandle) -> AppResult<String> {
     let conn = open_db(&app)?;
     executor::demo_install(&conn)
+}
+
+// ---- v0.3 工具与授权 ----
+
+/// 工具清单：按 role + mode 过滤可见性（内容角色看不到 cost 面工具）。
+#[tauri::command]
+pub fn tool_list(
+    app: tauri::AppHandle,
+    role: Option<String>,
+    mode: Option<String>,
+) -> AppResult<Vec<ToolRow>> {
+    let conn = open_db(&app)?;
+    let role = role.unwrap_or_else(|| "agent".into());
+    let mode = Mode::parse(mode.as_deref().unwrap_or("build"))?;
+    let specs = store::list_tool_specs(&conn)?;
+    let mut out = Vec::with_capacity(specs.len());
+    for s in specs {
+        let visible = store::tool_visible(&conn, &s.id, &role, mode)?;
+        let (title, server) = store::tool_meta(&conn, &s.id)?;
+        out.push(ToolRow {
+            id: s.id.clone(),
+            title,
+            server,
+            risk: s.risk,
+            plane: s.plane,
+            requires_approval: s.requires_approval,
+            irreversible: s.irreversible,
+            visible,
+        });
+    }
+    Ok(out)
+}
+
+/// 列出全部授权（管理视图，不受可见性过滤）。
+#[tauri::command]
+pub fn tool_grant_list(app: tauri::AppHandle) -> AppResult<Vec<ToolGrantRow>> {
+    let conn = open_db(&app)?;
+    let mut stmt = conn
+        .prepare("SELECT tool_id,mode,allowed,planes_json FROM tool_grants ORDER BY tool_id,mode")
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |r| {
+            let planes: String = r.get(3)?;
+            Ok(ToolGrantRow {
+                tool_id: r.get(0)?,
+                mode: r.get(1)?,
+                allowed: r.get::<_, i64>(2)? != 0,
+                planes: serde_json::from_str(&planes).unwrap_or_default(),
+            })
+        })
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Db(e.to_string()))
+}
+
+/// 改授权（需管理员模式；框架阶段不鉴权调用者，仅提供入口，UI 层标管理员）。
+#[tauri::command]
+pub fn tool_grant_set(app: tauri::AppHandle, payload: ToolGrantSetPayload) -> AppResult<()> {
+    let conn = open_db(&app)?;
+    let mode = Mode::parse(&payload.mode)?;
+    store::upsert_tool_grant(&conn, &payload.tool_id, mode, payload.allowed, &payload.planes)
+}
+
+// ---- v0.3 密钥引用（值只进 keystore，不落库不回显）----
+
+/// 只列引用元数据（storage_key/provider/label），绝不返回值。
+#[tauri::command]
+pub fn credential_list(app: tauri::AppHandle) -> AppResult<Vec<CredentialRef>> {
+    let conn = open_db(&app)?;
+    store::list_credentials(&conn)
+}
+
+/// 写值走 keystore（内存传值），DB 只存引用元数据；value 不进库、不进日志、不回显。
+#[tauri::command]
+pub fn credential_set(
+    app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
+    payload: CredentialSetPayload,
+) -> AppResult<()> {
+    if payload.ref_id.is_empty() || payload.value.is_empty() {
+        return Err(AppError::InvalidInput("ref_id 与 value 不得为空".into()));
+    }
+    ks.0.set(&payload.ref_id, &payload.value)?; // 值只进 keystore
+    let conn = open_db(&app)?;
+    store::upsert_credential_ref(
+        &conn,
+        &payload.ref_id,
+        &payload.provider,
+        payload.label.as_deref(),
+    )
+}
+
+/// 删除：同时清 keystore 值与库内引用元数据。
+#[tauri::command]
+pub fn credential_remove(
+    app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
+    ref_id: String,
+) -> AppResult<()> {
+    ks.0.delete(&ref_id)?;
+    let conn = open_db(&app)?;
+    store::remove_credential_ref(&conn, &ref_id)
 }

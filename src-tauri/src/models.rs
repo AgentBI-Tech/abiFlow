@@ -165,6 +165,57 @@ pub struct ScheduleSetPayload {
     pub interval_secs: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolGrantSetPayload {
+    pub tool_id: String,
+    pub mode: String,
+    pub allowed: bool,
+    pub planes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRow {
+    pub id: String,
+    pub title: String,
+    pub server: String,
+    pub risk: String,
+    pub plane: String,
+    pub requires_approval: bool,
+    pub irreversible: bool,
+    /// 当前角色/模式下的可见性（tool_list 按 role+mode 过滤后填充）。
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolGrantRow {
+    pub tool_id: String,
+    pub mode: String,
+    pub allowed: bool,
+    pub planes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialRef {
+    pub ref_id: String,
+    pub storage_key: String,
+    pub provider: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSetPayload {
+    pub ref_id: String,
+    pub provider: String,
+    pub label: Option<String>,
+    /// 密钥值：只在内存传给 keystore，绝不落库、不进日志、不回显。
+    pub value: String,
+}
+
 // ---- 命令出参 ----
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

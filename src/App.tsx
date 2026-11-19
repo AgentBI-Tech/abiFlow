@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import ToolsPanel from "./components/ToolsPanel";
 import {
   dashboardGet,
   demoInstall,
@@ -29,6 +30,7 @@ export default function App() {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const [tab, setTab] = useState<"board" | "tools">("board");
 
   const refresh = useCallback(async () => {
     try {
@@ -67,11 +69,19 @@ export default function App() {
     <main className="wrap" data-app="abi-pilot">
       <header>
         <h1>ABI-Pilot</h1>
-        <p className="sub">人机协同电商运营工作台 · v0.2 执行闭环（本地演示数据，非真实店铺）</p>
+        <p className="sub">人机协同电商运营工作台 · v0.3 工具与权限（本地演示数据，非真实店铺）</p>
+        <div className="tabs">
+          <button className={tab === "board" ? "tab on" : "tab"} onClick={() => setTab("board")}>运营看板</button>
+          <button className={tab === "tools" ? "tab on" : "tab"} onClick={() => setTab("tools")}>工具与权限</button>
+        </div>
       </header>
 
       {err && <p className="err" data-testid="error">{err}</p>}
 
+      {tab === "tools" ? (
+        <ToolsPanel onError={setErr} />
+      ) : (
+      <>
       <section className="actions">
         <button disabled={!!busy} onClick={() => act("安装演示", () => demoInstall())}>
           安装演示 SOP
@@ -188,6 +198,8 @@ export default function App() {
             </section>
           )}
         </>
+      )}
+      </>
       )}
     </main>
   );

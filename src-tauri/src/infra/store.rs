@@ -674,3 +674,231 @@ pub fn gate_state_for_step(conn: &Connection, step_id: &str) -> AppResult<GateSt
         Some(_) => Ok(GateState::Rejected),
     }
 }
+
+// ---- v0.3 工具授权（gateway 用）----
+
+use crate::domain::gateway::{Decision, Mode, ToolGrant, ToolSpec};
+
+/// 从 tools 表构造 ToolSpec；plane/requires_approval/irreversible 从 scope_json 解析，
+/// 缺省 plane=public、其余 false。无需改 schema。
+pub fn tool_spec(conn: &Connection, tool_id: &str) -> AppResult<ToolSpec> {
+    let (risk, scope): (String, String) = conn
+        .query_row(
+            "SELECT risk, scope_json FROM tools WHERE id=?1",
+            params![tool_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| AppError::Db(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound(format!("工具 {}", tool_id)))?;
+    let scope_v: serde_json::Value =
+        serde_json::from_str(&scope).unwrap_or_else(|_| serde_json::json!({}));
+    let get_str = |k: &str, d: &str| {
+        scope_v.get(k).and_then(|v| v.as_str()).unwrap_or(d).to_string()
+    };
+    let get_bool = |k: &str| scope_v.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    Ok(ToolSpec {
+        id: tool_id.to_string(),
+        risk,
+        plane: get_str("plane", "public"),
+        requires_approval: get_bool("requires_approval"),
+        irreversible: get_bool("irreversible"),
+    })
+}
+
+pub fn tool_grant(conn: &Connection, tool_id: &str, mode: Mode) -> AppResult<Option<ToolGrant>> {
+    conn.query_row(
+        "SELECT tool_id,mode,allowed,planes_json FROM tool_grants WHERE tool_id=?1 AND mode=?2",
+        params![tool_id, mode.as_str()],
+        |r| {
+            let planes: String = r.get(3)?;
+            let planes: Vec<String> =
+                serde_json::from_str(&planes).unwrap_or_default();
+            Ok(ToolGrant {
+                tool_id: r.get(0)?,
+                mode: Mode::parse(&r.get::<_, String>(1)?).unwrap_or(Mode::Build),
+                allowed: r.get::<_, i64>(2)? != 0,
+                planes,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| AppError::Db(e.to_string()))
+}
+
+pub fn list_tool_specs(conn: &Connection) -> AppResult<Vec<ToolSpec>> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM tools ORDER BY id")
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let ids: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
+    ids.iter().map(|id| tool_spec(conn, id)).collect()
+}
+
+pub fn upsert_tool_grant(
+    conn: &Connection,
+    tool_id: &str,
+    mode: Mode,
+    allowed: bool,
+    planes: &[String],
+) -> AppResult<()> {
+    let planes_json = serde_json::to_string(planes)
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    conn.execute(
+        "INSERT INTO tool_grants(tool_id,mode,allowed,planes_json) VALUES(?1,?2,?3,?4) \
+         ON CONFLICT(tool_id,mode) DO UPDATE SET allowed=?3, planes_json=?4",
+        params![tool_id, mode.as_str(), allowed as i64, planes_json],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+/// 构建授权上下文：actor 由外部给定，mode 与 grant 从库解析。
+pub fn call_ctx(
+    conn: &Connection,
+    run_id: &str,
+    actor: crate::domain::gateway::Actor,
+    mode: Mode,
+    tool_id: &str,
+) -> AppResult<crate::domain::gateway::CallCtx> {
+    Ok(crate::domain::gateway::CallCtx {
+        run_id: run_id.to_string(),
+        actor,
+        mode,
+        grant: tool_grant(conn, tool_id, mode)?,
+    })
+}
+
+/// 判定某工具对某角色/模式是否可见（供 tool_list 过滤）。
+pub fn tool_visible(
+    conn: &Connection,
+    tool_id: &str,
+    role: &str,
+    mode: Mode,
+) -> AppResult<bool> {
+    let spec = tool_spec(conn, tool_id)?;
+    let ctx = call_ctx(conn, "", crate::domain::gateway::Actor::human("", role), mode, tool_id)?;
+    Ok(matches!(
+        crate::domain::gateway::authorize(&spec, &ctx),
+        Decision::Allow | Decision::NeedGate
+    ))
+}
+
+/// 工具完整元数据（供 tool_list 展示真实 title/server）。
+pub fn tool_meta(conn: &Connection, tool_id: &str) -> AppResult<(String, String)> {
+    conn.query_row(
+        "SELECT title,server FROM tools WHERE id=?1",
+        params![tool_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(|e| AppError::Db(e.to_string()))?
+    .ok_or_else(|| AppError::NotFound(format!("工具 {}", tool_id)))
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+    use crate::domain::gateway::Mode;
+    use crate::infra::db;
+
+    #[test]
+    fn grant_change_affects_visibility() {
+        let c = db::open_in_memory().unwrap();
+        crate::domain::executor::demo_install(&c).unwrap();
+        // 初始：agent/build 授权 public+content → 可见。
+        assert!(tool_visible(&c, "demo:check_anomalies", "agent", Mode::Build).unwrap());
+        // 关掉 build 授权 → 不可见。
+        upsert_tool_grant(&c, "demo:check_anomalies", Mode::Build, false, &[]).unwrap();
+        assert!(!tool_visible(&c, "demo:check_anomalies", "agent", Mode::Build).unwrap());
+        // plan 模式授权还在 → plan 可见（三模式独立）。
+        assert!(tool_visible(&c, "demo:check_anomalies", "agent", Mode::Plan).unwrap());
+    }
+
+    #[test]
+    fn content_role_cannot_see_cost_plane_tool() {
+        let c = db::open_in_memory().unwrap();
+        // 造一个 cost 面工具 + 全模式全平面授权。
+        c.execute(
+            "INSERT INTO tools(id,server,command,title,risk,scope_json,enabled) \
+             VALUES('ads:spend','builtin','x','广告花费','low','{\"plane\":\"cost\"}',1)",
+            [],
+        ).unwrap();
+        for m in [Mode::Plan, Mode::Build, Mode::Review] {
+            upsert_tool_grant(&c, "ads:spend", m, true, &["cost".into()]).unwrap();
+        }
+        // content 角色被角色面策略拦下（看不到进价/花费）。
+        assert!(!tool_visible(&c, "ads:spend", "content", Mode::Build).unwrap());
+        // ops 角色可见。
+        assert!(tool_visible(&c, "ads:spend", "ops", Mode::Build).unwrap());
+    }
+}
+
+// ---- v0.3 credentials 元数据（只存引用，不存值）----
+
+use crate::models::CredentialRef;
+
+pub fn list_credentials(conn: &Connection) -> AppResult<Vec<CredentialRef>> {
+    let mut stmt = conn
+        .prepare("SELECT ref_id,storage_key,provider,label FROM credentials ORDER BY ref_id")
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(CredentialRef {
+                ref_id: r.get(0)?,
+                storage_key: r.get(1)?,
+                provider: r.get(2)?,
+                label: r.get(3)?,
+            })
+        })
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Db(e.to_string()))
+}
+
+pub fn upsert_credential_ref(
+    conn: &Connection,
+    ref_id: &str,
+    provider: &str,
+    label: Option<&str>,
+) -> AppResult<()> {
+    // storage_key 用 ref_id 自身（OS 密钥链里的条目键）；值不进库。
+    conn.execute(
+        "INSERT INTO credentials(ref_id,storage_key,provider,label,created_at,updated_at) \
+         VALUES(?1,?1,?2,?3,?4,?4) \
+         ON CONFLICT(ref_id) DO UPDATE SET provider=?2, label=?3, updated_at=?4",
+        params![ref_id, provider, label, now_secs()],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+pub fn remove_credential_ref(conn: &Connection, ref_id: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM credentials WHERE ref_id=?1", params![ref_id])
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    use crate::infra::db;
+
+    #[test]
+    fn credential_meta_never_stores_value() {
+        let c = db::open_in_memory().unwrap();
+        upsert_credential_ref(&c, "ga4-key", "ga4", Some("GA4 演示")).unwrap();
+        // 库里只有引用列，没有 value 列。
+        let mut stmt = c.prepare("PRAGMA table_info(credentials)").unwrap();
+        let cols: Vec<String> = stmt.query_map([], |r| r.get(1)).unwrap()
+            .filter_map(|r| r.ok()).collect();
+        assert!(!cols.iter().any(|x| x == "value" || x == "secret"));
+        let list = list_credentials(&c).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].ref_id, "ga4-key");
+        assert_eq!(list[0].storage_key, "ga4-key"); // storage_key = ref_id，不含密钥值
+    }
+}

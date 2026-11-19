@@ -10,10 +10,13 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::domain::executor::DemoTools;
+use crate::domain::keystore::{KeyStore, MemoryKeyStore};
 use crate::domain::scheduler;
 use crate::infra::db;
 
 struct SchedulerStop(Arc<AtomicBool>);
+/// 密钥链实例（框架期为进程内存实现；接真实店铺时替换为 OS 密钥链，trait 不变）。
+pub struct AppKeyStore(pub Arc<dyn KeyStore>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,6 +25,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let stop = Arc::new(AtomicBool::new(false));
             app.manage(SchedulerStop(stop.clone()));
+            app.manage(AppKeyStore(Arc::new(MemoryKeyStore::new())));
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(30));
                 if stop.load(Ordering::Relaxed) {
@@ -58,6 +62,12 @@ pub fn run() {
             commands::execution::dashboard_get,
             commands::execution::scheduler_tick,
             commands::execution::demo_install,
+            commands::execution::tool_list,
+            commands::execution::tool_grant_list,
+            commands::execution::tool_grant_set,
+            commands::execution::credential_list,
+            commands::execution::credential_set,
+            commands::execution::credential_remove,
         ])
         .run(tauri::generate_context!())
         .expect("ABI-Pilot 启动失败");
