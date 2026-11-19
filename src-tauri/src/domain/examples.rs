@@ -113,6 +113,8 @@ pub fn maintenance_sop_definition() -> Value {
 
 /// 安装维护 SOP（不存在则建）。与示例工具组搭配，供「每日维护」直接跑。
 pub fn install_maintenance_sop(conn: &rusqlite::Connection) -> AppResult<String> {
+    // SOP 依赖示例工具；先幂等装好工具与授权，避免装出「引用未注册工具」的无效 SOP。
+    install_agentbi_examples(conn)?;
     let sop_id = "sop-agentbi-daily-maintenance";
     let existing: Option<i32> = conn
         .query_row("SELECT version FROM sops WHERE id=?1", [sop_id], |r| r.get(0))
@@ -161,13 +163,15 @@ mod tests {
     fn maintenance_sop_validates_and_installs() {
         use crate::domain::sop::SopDefinition;
         let def: SopDefinition = serde_json::from_value(maintenance_sop_definition()).unwrap();
-        // 先装工具，AST 校验要求 mcp_tool 的 tool 已注册。
         let c = db::open_in_memory().unwrap();
-        install_agentbi_examples(&c).unwrap();
-        let known = store::known_tools(&c).unwrap();
-        def.validate(&known).unwrap();
+        // 只装 SOP，不预先装工具——安装函数应自动把依赖的工具/授权补齐。
         let sop_id = install_maintenance_sop(&c).unwrap();
         assert_eq!(sop_id, "sop-agentbi-daily-maintenance");
+        let known = store::known_tools(&c).unwrap();
+        for t in agentbi_example_tools() {
+            assert!(known.contains(&t.id), "SOP 依赖的工具 {} 应随 SOP 一起装好", t.id);
+        }
+        def.validate(&known).unwrap();
         assert!(store::get_sop(&c, &sop_id).is_ok());
         assert!(store::dashboard(&c).unwrap().schedules.iter().any(|s| s.sop_id == sop_id));
     }

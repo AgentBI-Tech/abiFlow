@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use crate::domain::audit::redact_value;
 use crate::domain::gateway::{self, Actor, Decision, Mode};
+use crate::domain::llm::LlmProvider;
 use crate::domain::sop::{eval_condition, NodeType, SopDefinition};
 use crate::infra::store::{self, GateState};
 use crate::models::{new_id, now_secs, AppError, AppResult};
@@ -77,6 +78,7 @@ pub fn start_run(
     trigger_by: &str,
     input: &Value,
     tools: &dyn ToolRunner,
+    llm: &dyn LlmProvider,
 ) -> AppResult<String> {
     let sop = store::get_sop(conn, sop_id)?;
     if !sop.enabled {
@@ -119,12 +121,12 @@ pub fn start_run(
     store::update_run_cursor(conn, &run_id, None, &outputs_json, "[]")?;
     store::update_run_status(conn, &run_id, "running", None, None)?;
 
-    advance(conn, &run_id, tools)?;
+    advance(conn, &run_id, tools, llm)?;
     Ok(run_id)
 }
 
 /// 推进一条 run 直到：完成 / 失败 / 等人工。返回最终状态字符串。
-pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner) -> AppResult<String> {
+pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dyn LlmProvider) -> AppResult<String> {
     let run = store::get_run(conn, run_id)?;
 
     // 不变量 1：wait_human 的 run 不得推进，除非对应 gate 已裁决。
@@ -277,12 +279,35 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner) -> AppRe
             }
             NodeType::AgentStep => {
                 let step_id = store::step_id_for_node(conn, run_id, &current)?;
-                if let Some(id) = step_id {
-                    let out = json!({"note": "v0.2 占位：Agent 推理在 v0.3 接入"});
-                    let out_str = serde_json::to_string(&out).unwrap_or_default();
-                    store::update_step(conn, &id, "done", None, Some(&out_str))?;
+                let goal = node
+                    .config
+                    .get("goal")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("汇总上游结果并给出处置建议");
+                // 把上游工具输出作为上下文喂给 LLM（只传本地事实，不跨店比绝对值）。
+                let prompt = format!(
+                    "你是电商运营助手。任务：{}\n已知的上游步骤输出（JSON）：{}\n\
+                     约束：不编造金额、不下合规判定、不替人做资金/不可逆决定；\
+                     有异常建议转人工。用简短 JSON 给出结论。",
+                    goal,
+                    serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into())
+                );
+                let generated = llm.generate(&prompt)?;
+                let mut safe = redact_value(&serde_json::from_str::<Value>(&generated)
+                    .unwrap_or_else(|_| json!({"text": generated})));
+                // 标注实际 provider/mock 到产物本身——持久化的 step 输出与日志也要能追溯来源。
+                if let Some(obj) = safe.as_object_mut() {
+                    obj.insert("provider".into(), json!(llm.name()));
+                    obj.insert("mock".into(), json!(llm.is_mock()));
                 }
-                outputs.insert(current.clone(), json!({"note": "v0.2 agent placeholder"}));
+                let out_str = serde_json::to_string(&safe).unwrap_or_else(|_| "{}".into());
+                if let Some(ref id) = step_id {
+                    store::update_step(conn, id, "done", None, Some(&out_str))?;
+                    store::insert_log(
+                        conn, id, "agent", Some(llm.name()), None, Some(&out_str), Some("ok"),
+                    )?;
+                }
+                outputs.insert(current.clone(), safe);
                 current = choose_next(&def, &current, &outputs)?
                     .ok_or_else(|| AppError::InvalidInput("agent_step 无后继".into()))?;
             }
@@ -375,13 +400,18 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner) -> AppRe
 }
 
 /// 人工裁决后恢复 run：把状态从 wait_human 改回 running，再推进。
-pub fn resume_after_gate(conn: &Connection, run_id: &str, tools: &dyn ToolRunner) -> AppResult<String> {
+pub fn resume_after_gate(
+    conn: &Connection,
+    run_id: &str,
+    tools: &dyn ToolRunner,
+    llm: &dyn LlmProvider,
+) -> AppResult<String> {
     let run = store::get_run(conn, run_id)?;
     if run.status != "wait_human" {
         return Ok(run.status);
     }
     store::update_run_status(conn, run_id, "running", None, None)?;
-    advance(conn, run_id, tools)
+    advance(conn, run_id, tools, llm)
 }
 
 /// 暂停/恢复/取消/接管。v0.2 只真正实现 cancel 与 takeover 改状态，其余返回提示。
@@ -460,6 +490,7 @@ pub fn demo_install(conn: &Connection) -> AppResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::llm::MockProvider;
     use crate::infra::db;
 
     fn setup() -> Connection {
@@ -479,11 +510,11 @@ mod tests {
     #[test]
     fn run_stops_at_gate_and_cannot_advance() {
         let c = setup();
-        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools).unwrap();
+        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
         let run = store::get_run(&c, &run_id).unwrap();
         assert_eq!(run.status, "wait_human", "应在人工门停住");
         // 再次推进不应越过 wait_human（不变量 1）。
-        let s = advance(&c, &run_id, &DemoTools).unwrap();
+        let s = advance(&c, &run_id, &DemoTools, &MockProvider).unwrap();
         assert_eq!(s, "wait_human");
         let gates = store::list_gates(&c, true).unwrap();
         assert_eq!(gates.len(), 1);
@@ -492,10 +523,10 @@ mod tests {
     #[test]
     fn approve_gate_resumes_to_done() {
         let c = setup();
-        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools).unwrap();
+        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
         let gate = &store::list_gates(&c, true).unwrap()[0];
         store::decide_gate(&c, &gate.id, "approve", None).unwrap();
-        let s = resume_after_gate(&c, &run_id, &DemoTools).unwrap();
+        let s = resume_after_gate(&c, &run_id, &DemoTools, &MockProvider).unwrap();
         assert_eq!(s, "done");
         let run = store::get_run(&c, &run_id).unwrap();
         assert_eq!(run.verdict.as_deref(), Some("pass"));
@@ -510,10 +541,10 @@ mod tests {
     #[test]
     fn reject_gate_fails_run() {
         let c = setup();
-        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools).unwrap();
+        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
         let gate = &store::list_gates(&c, true).unwrap()[0];
         store::decide_gate(&c, &gate.id, "reject", None).unwrap();
-        let s = resume_after_gate(&c, &run_id, &DemoTools).unwrap();
+        let s = resume_after_gate(&c, &run_id, &DemoTools, &MockProvider).unwrap();
         assert_eq!(s, "failed");
     }
 
@@ -541,16 +572,136 @@ mod tests {
             expect_version: None,
         };
         store::upsert_sop(&c, &p).unwrap();
-        let run_id = start_run(&c, "sop-high", "build", "manual", &json!({}), &DemoTools).unwrap();
+        let run_id = start_run(&c, "sop-high", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
         assert_eq!(store::get_run(&c, &run_id).unwrap().status, "wait_human", "高风险必须先过人工门");
     }
 
     #[test]
     fn cancel_terminal_guard() {
         let c = setup();
-        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools).unwrap();
+        let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
         let s = control(&c, &run_id, "cancel").unwrap();
         assert_eq!(s, "cancelled");
         assert!(control(&c, &run_id, "cancel").is_err(), "终态不可再取消");
+    }
+}
+
+#[cfg(test)]
+mod agent_step_llm_tests {
+    use super::*;
+    use crate::domain::llm::{LlmProvider, MockProvider};
+    use crate::infra::db;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct SpyProvider {
+        calls: Arc<AtomicUsize>,
+        inner: MockProvider,
+    }
+    impl LlmProvider for SpyProvider {
+        fn name(&self) -> &str { "spy-mock" }
+        fn is_mock(&self) -> bool { true }
+        fn generate(&self, prompt: &str) -> AppResult<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.generate(prompt)
+        }
+    }
+
+    #[test]
+    fn agent_step_invokes_llm_and_records_provider() {
+        let c = db::open_in_memory().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let spy = SpyProvider { calls: calls.clone(), inner: MockProvider };
+        let def: serde_json::Value = serde_json::from_value(json!({
+            "version":1,
+            "nodes":[
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"agent_step","config":{"goal":"总结异常"}},
+                {"id":"n2","type":"end","config":{}}
+            ],
+            "edges":[{"from":"n0","to":"n1"},{"from":"n1","to":"n2"}]
+        })).unwrap();
+        let p = crate::models::SopUpsertPayload {
+            id: Some("sop-agent".into()), name: "agent 推理".into(),
+            trigger_json: "{}".into(), risk: "low".into(), owner_policy: "agent".into(),
+            definition: def, expect_version: None,
+        };
+        store::upsert_sop(&c, &p).unwrap();
+        let run_id = start_run(&c, "sop-agent", "build", "manual", &json!({}), &DemoTools, &spy).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "agent_step 应调用 LLM 一次");
+        let run = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(run.status, "done");
+        let steps = store::list_steps(&c, &run_id).unwrap();
+        let out: serde_json::Value = serde_json::from_str(steps[1].output_json.as_deref().unwrap()).unwrap();
+        assert_eq!(out["provider"], "spy-mock", "产物应标注实际 provider");
+        // 审计日志应记下 provider 名。
+        assert_eq!(
+            c.query_row::<String, _, _>(
+                "SELECT tool_command FROM step_logs WHERE step_id=?1",
+                rusqlite::params![steps[1].id], |r| r.get(0)
+            ).unwrap_or_default(),
+            "spy-mock"
+        );
+    }
+}
+
+/// 自然语言 → SOP AST 草稿（§3.1 sop_parse_text）：只返回草稿，不落库、不放行。
+/// 草稿仍需人工确认后走 sop_upsert；validate 检查结构合法性，未知工具Warnings 一并返回给前端提示。
+pub fn parse_sop_text(
+    text: &str,
+    llm: &dyn LlmProvider,
+) -> AppResult<serde_json::Value> {
+    if text.trim().is_empty() {
+        return Err(AppError::InvalidInput("描述不得为空".into()));
+    }
+    let prompt = format!(
+        "SOP_DRAFT: 把下面的运营需求解析成 ABI-Pilot SOP AST（JSON）。\
+         节点类型只用 start/agent_step/mcp_tool/human_gate/condition/acceptance/end。\
+         资金/不可逆动作必须配 human_gate。需求：{}",
+        text
+    );
+    let raw = llm.generate(&prompt)?;
+    // 尝试从模型输出里截取 JSON（容忍前后有说明文字）。
+    let json_str = extract_json_object(&raw)
+        .ok_or_else(|| AppError::LlmError("LLM 未返回合法 JSON 草稿".into()))?;
+    let draft: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| AppError::LlmError(format!("草稿 JSON 非法：{}", e)))?;
+    // 结构校验（不校验工具是否已注册——草稿里可能用占位工具，交人工确认时再改）。
+    let def: SopDefinition = serde_json::from_value(draft.clone())
+        .map_err(|e| AppError::LlmError(format!("草稿结构不符合 AST：{}", e)))?;
+    let _ = def; // 解析成功即结构基本合法
+    Ok(draft)
+}
+
+fn extract_json_object(s: &str) -> Option<&str> {
+    let start = s.find('{')?;
+    let end = s.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    Some(&s[start..=end])
+}
+
+#[cfg(test)]
+mod sop_parse_tests {
+    use super::*;
+    use crate::domain::llm::MockProvider;
+    use crate::infra::db;
+
+    #[test]
+    fn parse_text_returns_structural_draft_not_persisted() {
+        let c = db::open_in_memory().unwrap();
+        let before = store::list_sops(&c, false).unwrap().len();
+        let draft = parse_sop_text("每日检查异常订单", &MockProvider).unwrap();
+        assert_eq!(draft["version"], 1);
+        assert!(draft["nodes"].as_array().unwrap().len() >= 3);
+        let after = store::list_sops(&c, false).unwrap().len();
+        assert_eq!(before, after, "草稿不得落库");
+        assert_eq!(draft["_mock"], true);
+    }
+
+    #[test]
+    fn empty_input_rejected() {
+        assert!(parse_sop_text("  ", &MockProvider).is_err());
     }
 }

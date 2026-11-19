@@ -614,7 +614,7 @@ pub fn dashboard(conn: &Connection) -> AppResult<DashboardData> {
     let schedules = {
         let mut stmt = conn
             .prepare(
-                "SELECT sc.sop_id, s.name, sc.next_run_at, sc.last_run_at, sc.status \
+                "SELECT sc.sop_id, s.name, sc.next_run_at, sc.last_run_at, sc.status, sc.interval_secs \
                  FROM schedules sc JOIN sops s ON s.id=sc.sop_id ORDER BY sc.next_run_at",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
@@ -626,6 +626,7 @@ pub fn dashboard(conn: &Connection) -> AppResult<DashboardData> {
                     next_run_at: r.get(2)?,
                     last_run_at: r.get(3)?,
                     status: r.get(4)?,
+                    interval_secs: r.get(5)?,
                 })
             })
             .map_err(|e| AppError::Db(e.to_string()))?;

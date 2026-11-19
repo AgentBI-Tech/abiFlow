@@ -4,6 +4,7 @@ use serde_json::json;
 use tauri::Manager;
 
 use crate::AppKeyStore;
+use crate::AppLlm;
 use crate::domain::executor::{self};
 use crate::domain::examples;
 use crate::domain::experience;
@@ -78,6 +79,7 @@ pub fn schedule_set(app: tauri::AppHandle, payload: ScheduleSetPayload) -> AppRe
 pub fn run_start(
     app: tauri::AppHandle,
     ks: tauri::State<'_, AppKeyStore>,
+    llmst: tauri::State<'_, AppLlm>,
     payload: RunStartPayload,
 ) -> AppResult<RunStartResult> {
     let conn = open_db(&app)?;
@@ -90,6 +92,7 @@ pub fn run_start(
         "manual",
         payload.input.as_ref().unwrap_or(&json!({})),
         &engine,
+        llmst.0.as_ref(),
     )?;
     Ok(RunStartResult { run_id })
 }
@@ -137,6 +140,7 @@ pub fn gate_list(app: tauri::AppHandle, pending_only: Option<bool>) -> AppResult
 pub fn gate_decide(
     app: tauri::AppHandle,
     ks: tauri::State<'_, AppKeyStore>,
+    llmst: tauri::State<'_, AppLlm>,
     payload: GateDecidePayload,
 ) -> AppResult<()> {
     let conn = open_db(&app)?;
@@ -157,7 +161,7 @@ pub fn gate_decide(
             store::update_run_status(&conn, &gate.run_id, "failed", Some(verdict), Some("人工驳回/取消"))?;
         }
         _ => {
-            executor::resume_after_gate(&conn, &gate.run_id, &engine)?;
+            executor::resume_after_gate(&conn, &gate.run_id, &engine, llmst.0.as_ref())?;
         }
     }
     Ok(())
@@ -172,10 +176,10 @@ pub fn dashboard_get(app: tauri::AppHandle) -> AppResult<DashboardData> {
 }
 
 #[tauri::command]
-pub fn scheduler_tick(app: tauri::AppHandle, ks: tauri::State<'_, AppKeyStore>) -> AppResult<SchedulerTickResult> {
+pub fn scheduler_tick(app: tauri::AppHandle, ks: tauri::State<'_, AppKeyStore>, llmst: tauri::State<'_, AppLlm>) -> AppResult<SchedulerTickResult> {
     let conn = open_db(&app)?;
     let engine = ToolEngine::new(ks.0.clone());
-    scheduler::tick(&conn, &engine)
+    scheduler::tick(&conn, &engine, llmst.0.as_ref())
 }
 
 #[tauri::command]
@@ -461,4 +465,33 @@ pub fn example_tools_install(app: tauri::AppHandle) -> AppResult<Vec<String>> {
 pub fn maintenance_sop_install(app: tauri::AppHandle) -> AppResult<String> {
     let conn = open_db(&app)?;
     examples::install_maintenance_sop(&conn)
+}
+
+/// 以 agent/scheduler 身份立即触发一次（与手动运行区分 trigger_by）。
+#[tauri::command]
+pub fn run_as_agent(
+    app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
+    llmst: tauri::State<'_, AppLlm>,
+    sop_id: String,
+) -> AppResult<RunStartResult> {
+    let conn = open_db(&app)?;
+    let engine = ToolEngine::new(ks.0.clone());
+    let run_id = executor::start_run(&conn, &sop_id, "build", "scheduler", &json!({}), &engine, llmst.0.as_ref())?;
+    Ok(RunStartResult { run_id })
+}
+
+/// 自然语言 → SOP AST 草稿（只返回，不落库）。人工确认后再调 sop_upsert。
+#[tauri::command]
+pub fn sop_parse_text(llmst: tauri::State<'_, AppLlm>, text: String) -> AppResult<serde_json::Value> {
+    executor::parse_sop_text(&text, llmst.0.as_ref())
+}
+
+/// 当前 LLM provider 状态（名称 / 是否 mock），供 UI 如实展示。
+#[tauri::command]
+pub fn llm_status(llmst: tauri::State<'_, AppLlm>) -> serde_json::Value {
+    serde_json::json!({
+        "name": llmst.0.name(),
+        "mock": llmst.0.is_mock(),
+    })
 }

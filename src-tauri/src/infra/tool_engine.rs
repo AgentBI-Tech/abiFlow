@@ -197,6 +197,7 @@ mod tests {
 mod http_integration_tests {
     use super::*;
     use crate::domain::executor;
+    use crate::domain::llm::MockProvider;
     use crate::infra::db;
     use crate::infra::store;
     use crate::models::SopUpsertPayload;
@@ -257,7 +258,7 @@ mod http_integration_tests {
             definition: def, expect_version: None,
         };
         store::upsert_sop(&c, &p).unwrap();
-        let run_id = executor::start_run(&c, "sop-http", "build", "manual", &json!({}), &engine).unwrap();
+        let run_id = executor::start_run(&c, "sop-http", "build", "manual", &json!({}), &engine, &MockProvider).unwrap();
         let run = store::get_run(&c, &run_id).unwrap();
         assert_eq!(run.status, "done");
         assert_eq!(run.verdict.as_deref(), Some("pass"));
@@ -274,7 +275,6 @@ mod live_tests {
     use super::*;
     use crate::domain::examples;
     use crate::domain::keystore::MemoryKeyStore;
-    use crate::infra::store;
 
     /// 手动跑：实调 agentbi.tech 示例工具，确认通用 HTTP 引擎真能维护「自建电商网」。
     /// `cargo test live_agentbi -- --ignored --nocapture`

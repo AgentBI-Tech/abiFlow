@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
+import LlmPanel from "./components/LlmPanel";
 import {
   dashboardGet,
   demoInstall,
@@ -9,6 +10,8 @@ import {
   gateDecide,
   runGet,
   runStart,
+  runAsAgent,
+  scheduleSet,
   schedulerTick,
   sopSetEnabled,
   type DashboardData,
@@ -32,7 +35,7 @@ export default function App() {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"board" | "tools" | "experience" | "custom">("board");
+  const [tab, setTab] = useState<"board" | "tools" | "custom" | "experience" | "llm">("board");
 
   const refresh = useCallback(async () => {
     try {
@@ -77,6 +80,7 @@ export default function App() {
           <button className={tab === "tools" ? "tab on" : "tab"} onClick={() => setTab("tools")}>工具与权限</button>
           <button className={tab === "custom" ? "tab on" : "tab"} onClick={() => setTab("custom")}>自定义工具</button>
           <button className={tab === "experience" ? "tab on" : "tab"} onClick={() => setTab("experience")}>经验沉淀</button>
+          <button className={tab === "llm" ? "tab on" : "tab"} onClick={() => setTab("llm")}>AI / 建 SOP</button>
         </div>
       </header>
 
@@ -88,6 +92,8 @@ export default function App() {
         <CustomToolsPanel onError={setErr} />
       ) : tab === "experience" ? (
         <ExperiencePanel onError={setErr} />
+      ) : tab === "llm" ? (
+        <LlmPanel onError={setErr} />
       ) : (
       <>
       <section className="actions">
@@ -111,7 +117,9 @@ export default function App() {
           <section className="card">
             <h2>SOP 列表</h2>
             <ul className="list">
-              {data.sops.map((s) => (
+              {data.sops.map((s) => {
+                const sched = data.schedules.find((x) => x.sopId === s.id);
+                return (
                 <li key={s.id} data-testid="sop-item">
                   <div className="row">
                     <strong>{s.name}</strong>
@@ -124,13 +132,39 @@ export default function App() {
                     <span>{s.id}</span>
                   </div>
                   <div className="row actions">
-                    <button disabled={!!busy} onClick={() => act("启动", () => runStart(s.id))}>手动运行</button>
+                    <button disabled={!!busy} onClick={() => act("手动", () => runStart(s.id))}>手动运行</button>
+                    <button disabled={!!busy} onClick={() => act("agent", () => runAsAgent(s.id))}>以 agent 跑一次</button>
                     <button disabled={!!busy} onClick={() => act("启停", () => sopSetEnabled(s.id, !s.enabled))}>
                       {s.enabled ? "停用" : "启用"}
                     </button>
                   </div>
+                  <div className="row actions sched">
+                    <span className={`pill ${sched ? "on" : "off"}`}>{sched ? "自动运行中" : "未设自动"}</span>
+                    <label>间隔
+                      <select
+                        value={sched ? String(sched.intervalSecs) : "0"}
+                        disabled={!!busy}
+                        onChange={(e) => act("设置间隔", () => scheduleSet(s.id, true, Number(e.target.value)))}
+                      >
+                        <option value="0" disabled>选择间隔</option>
+                        <option value="600">10 分钟</option>
+                        <option value="1800">30 分钟</option>
+                        <option value="3600">1 小时</option>
+                        <option value="86400">1 天</option>
+                      </select>
+                    </label>
+                    {sched ? (
+                      <>
+                        <span className="ver">下次 {fmtTime(sched.nextRunAt)}</span>
+                        <button disabled={!!busy} onClick={() => act("停调度", () => scheduleSet(s.id, false, 0))}>停自动</button>
+                      </>
+                    ) : (
+                      <button disabled={!!busy} onClick={() => act("开调度", () => scheduleSet(s.id, true, 3600))}>开自动</button>
+                    )}
+                  </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </section>
 

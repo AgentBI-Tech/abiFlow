@@ -108,6 +108,7 @@ pub struct ScheduleInfo {
     pub next_run_at: Option<i64>,
     pub last_run_at: Option<i64>,
     pub status: String,
+    pub interval_secs: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -82,6 +82,7 @@ export type ScheduleInfo = {
   nextRunAt: number | null;
   lastRunAt: number | null;
   status: string;
+  intervalSecs: number;
 };
 
 export type DashboardData = {
@@ -188,11 +189,28 @@ export function gateDecide(gateId: string, decision: string, note?: string): Pro
 export function schedulerTick(): Promise<SchedulerTickResult> {
   return invoke("scheduler_tick");
 }
+export function scheduleSet(sopId: string, enabled: boolean, intervalSecs: number): Promise<void> {
+  return invoke("schedule_set", { payload: { sopId, enabled, intervalSecs } });
+}
+export function runAsAgent(sopId: string): Promise<{ runId: string }> {
+  return invoke("run_as_agent", { sopId });
+}
 export function demoInstall(): Promise<string> {
   return invoke("demo_install");
 }
 export function sopSetEnabled(id: string, enabled: boolean): Promise<void> {
   return invoke("sop_set_enabled", { id, enabled });
+}
+export function sopUpsert(p: {
+  id?: string;
+  name: string;
+  triggerJson: string;
+  risk: string;
+  ownerPolicy: string;
+  definition: Record<string, unknown>;
+  expectVersion?: number;
+}): Promise<{ id: string; version: number }> {
+  return invoke("sop_upsert", { payload: p });
 }
 export function toolList(role: string, mode: string): Promise<ToolRow[]> {
   return invoke("tool_list", { role, mode });
@@ -258,6 +276,12 @@ export function exampleToolsInstall(): Promise<string[]> {
 }
 export function maintenanceSopInstall(): Promise<string> {
   return invoke("maintenance_sop_install");
+}
+export function llmStatus(): Promise<{ name: string; mock: boolean }> {
+  return invoke("llm_status");
+}
+export function sopParseText(text: string): Promise<Record<string, unknown>> {
+  return invoke("sop_parse_text", { text });
 }
 
 export function errMessage(e: unknown): string {

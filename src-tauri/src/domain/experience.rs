@@ -254,6 +254,7 @@ mod tests {
 mod integration_tests {
     use super::*;
     use crate::domain::executor::{self, DemoTools};
+    use crate::domain::llm::MockProvider;
     use crate::infra::{db, store, template_zip};
     use crate::models::CorrectionInput;
 
@@ -263,11 +264,11 @@ mod integration_tests {
         executor::demo_install(&c).unwrap();
         // 跑通一条到 done（含人工门批准）。
         let run_id = executor::start_run(
-            &c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools,
+            &c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools, &MockProvider,
         ).unwrap();
         let gate = store::list_gates(&c, true).unwrap()[0].clone();
         store::decide_gate(&c, &gate.id, "approve", None).unwrap();
-        assert_eq!(executor::resume_after_gate(&c, &run_id, &DemoTools).unwrap(), "done");
+        assert_eq!(executor::resume_after_gate(&c, &run_id, &DemoTools, &MockProvider).unwrap(), "done");
 
         // 捕获模板：validated=1（实测通过）。
         let detail = store::run_detail(&c, &run_id).unwrap();

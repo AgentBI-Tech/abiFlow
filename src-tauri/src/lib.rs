@@ -10,6 +10,7 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::domain::keystore::{KeyStore, MemoryKeyStore};
+use crate::domain::llm::{self, LlmProvider};
 use crate::domain::scheduler;
 use crate::infra::db;
 use crate::infra::tool_engine::ToolEngine;
@@ -17,6 +18,16 @@ use crate::infra::tool_engine::ToolEngine;
 struct SchedulerStop(Arc<AtomicBool>);
 /// 密钥链实例（框架期为进程内存实现；接真实店铺时替换为 OS 密钥链，trait 不变）。
 pub struct AppKeyStore(pub Arc<dyn KeyStore>);
+/// LLM Provider（默认 Mock；本机未装 Ollama，装好后改配置即可切换，核心不动）。
+pub struct AppLlm(pub Arc<dyn LlmProvider>);
+
+/// 从环境变量读 LLM 配置：ABI_LLM_PROVIDER=ollama + ABI_LLM_HOST + ABI_LLM_MODEL。
+fn build_llm() -> Arc<dyn LlmProvider> {
+    let provider = std::env::var("ABI_LLM_PROVIDER").unwrap_or_default();
+    let host = std::env::var("ABI_LLM_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".into());
+    let model = std::env::var("ABI_LLM_MODEL").unwrap_or_else(|_| "qwen2.5:3b".into());
+    llm::from_config(&provider, &host, &model)
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,6 +38,8 @@ pub fn run() {
             app.manage(SchedulerStop(stop.clone()));
             let ks: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
             app.manage(AppKeyStore(ks.clone()));
+            let llm: Arc<dyn LlmProvider> = build_llm();
+            app.manage(AppLlm(llm.clone()));
             let engine = ToolEngine::new(ks);
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(30));
@@ -36,7 +49,7 @@ pub fn run() {
                 if let Ok(dir) = handle.path().app_data_dir() {
                     let path = dir.join("abi-pilot").join("abi.db");
                     if let Ok(conn) = db::open(&path) {
-                        let _ = scheduler::tick(&conn, &engine);
+                        let _ = scheduler::tick(&conn, &engine, llm.as_ref());
                     }
                 }
             });
@@ -83,6 +96,9 @@ pub fn run() {
             commands::execution::tool_remove,
             commands::execution::example_tools_install,
             commands::execution::maintenance_sop_install,
+            commands::execution::run_as_agent,
+            commands::execution::sop_parse_text,
+            commands::execution::llm_status,
         ])
         .run(tauri::generate_context!())
         .expect("ABI-Pilot 启动失败");
