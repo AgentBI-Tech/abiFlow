@@ -342,7 +342,7 @@ pub fn update_step(
 pub fn list_steps(conn: &Connection, run_id: &str) -> AppResult<Vec<StepRow>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id,run_id,seq,node_type,owner,tool_ref,status,input_json,output_json,started_at,finished_at \
+            "SELECT id,run_id,seq,node_type,owner,tool_ref,node_id,status,input_json,output_json,started_at,finished_at \
              FROM steps WHERE run_id=?1 ORDER BY seq",
         )
         .map_err(|e| AppError::Db(e.to_string()))?;
@@ -355,11 +355,12 @@ pub fn list_steps(conn: &Connection, run_id: &str) -> AppResult<Vec<StepRow>> {
                 node_type: r.get(3)?,
                 owner: r.get(4)?,
                 tool_ref: r.get(5)?,
-                status: r.get(6)?,
-                input_json: r.get(7)?,
-                output_json: r.get(8)?,
-                started_at: r.get(9)?,
-                finished_at: r.get(10)?,
+                node_id: r.get(6)?,
+                status: r.get(7)?,
+                input_json: r.get(8)?,
+                output_json: r.get(9)?,
+                started_at: r.get(10)?,
+                finished_at: r.get(11)?,
             })
         })
         .map_err(|e| AppError::Db(e.to_string()))?;
@@ -901,4 +902,152 @@ mod credential_tests {
         assert_eq!(list[0].ref_id, "ga4-key");
         assert_eq!(list[0].storage_key, "ga4-key"); // storage_key = ref_id，不含密钥值
     }
+}
+
+// ---- v0.4 经验沉淀：templates / corrections ----
+
+use crate::models::{CorrectionInput, CorrectionRow, TemplateBundle, TemplateRow};
+
+pub fn list_templates(conn: &Connection) -> AppResult<Vec<TemplateRow>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id,name,sop_snapshot,trajectory_json,corrections_json,source_shop,validated,created_at \
+             FROM templates ORDER BY created_at DESC",
+        )
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(TemplateRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                sop_snapshot: r.get(2)?,
+                trajectory_json: r.get(3)?,
+                corrections_json: r.get(4)?,
+                source_shop: r.get(5)?,
+                validated: r.get::<_, i64>(6)? != 0,
+                created_at: r.get(7)?,
+            })
+        })
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Db(e.to_string()))
+}
+
+pub fn save_template(conn: &Connection, bundle: &TemplateBundle) -> AppResult<String> {
+    let id = new_id("tpl");
+    conn.execute(
+        "INSERT INTO templates(id,name,sop_snapshot,trajectory_json,corrections_json,source_shop,validated,created_at) \
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![
+            id, bundle.name, bundle.sop_snapshot, bundle.trajectory_json, bundle.corrections_json,
+            bundle.source_shop, bundle.validated as i64, now_secs()
+        ],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(id)
+}
+
+pub fn list_corrections(conn: &Connection, step_id: Option<&str>) -> AppResult<Vec<CorrectionRow>> {
+    let (sql, param): (&str, Option<&str>) = if let Some(s) = step_id {
+        (
+            "SELECT id,step_id,run_id,node_type,original_json,corrected_json,note,author,created_at \
+             FROM corrections WHERE step_id=?1 ORDER BY created_at",
+            Some(s),
+        )
+    } else {
+        (
+            "SELECT id,step_id,run_id,node_type,original_json,corrected_json,note,author,created_at \
+             FROM corrections ORDER BY created_at DESC",
+            None,
+        )
+    };
+    let mut stmt = conn.prepare(sql).map_err(|e| AppError::Db(e.to_string()))?;
+    let rows = if let Some(s) = param {
+        stmt.query_map(params![s], map_correction)
+    } else {
+        stmt.query_map([], map_correction)
+    }
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Db(e.to_string()))
+}
+
+fn map_correction(r: &rusqlite::Row) -> Result<CorrectionRow, rusqlite::Error> {
+    Ok(CorrectionRow {
+        id: r.get(0)?,
+        step_id: r.get(1)?,
+        run_id: r.get(2)?,
+        node_type: r.get(3)?,
+        original_json: r.get(4)?,
+        corrected_json: r.get(5)?,
+        note: r.get(6)?,
+        author: r.get(7)?,
+        created_at: r.get(8)?,
+    })
+}
+
+pub fn add_correction(conn: &Connection, step_id: &str, input: &CorrectionInput) -> AppResult<i64> {
+    // 从 step 反查 run_id / node_type，保证审计字段真实。
+    let (run_id, node_type): (String, String) = conn
+        .query_row(
+            "SELECT run_id,node_type FROM steps WHERE id=?1",
+            params![step_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| AppError::Db(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound(format!("步骤 {}", step_id)))?;
+    conn.execute(
+        "INSERT INTO corrections(step_id,run_id,node_type,original_json,corrected_json,note,author,created_at) \
+         VALUES(?1,?2,?3,?4,?5,?6,'human',?7)",
+        params![
+            step_id, run_id, node_type, input.original_json, input.corrected_json,
+            input.note, now_secs()
+        ],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn count_completed_runs(conn: &Connection) -> AppResult<usize> {
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM runs WHERE status='done'", [], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(n as usize)
+}
+
+pub fn count_acceptance_checks(conn: &Connection) -> AppResult<usize> {
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM acceptance", [], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(n as usize)
+}
+
+pub fn all_steps(conn: &Connection) -> AppResult<Vec<StepRow>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id,run_id,seq,node_type,owner,tool_ref,node_id,status,input_json,output_json,started_at,finished_at \
+             FROM steps ORDER BY run_id,seq",
+        )
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(StepRow {
+                id: r.get(0)?,
+                run_id: r.get(1)?,
+                seq: r.get(2)?,
+                node_type: r.get(3)?,
+                owner: r.get(4)?,
+                tool_ref: r.get(5)?,
+                node_id: r.get(6)?,
+                status: r.get(7)?,
+                input_json: r.get(8)?,
+                output_json: r.get(9)?,
+                started_at: r.get(10)?,
+                finished_at: r.get(11)?,
+            })
+        })
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Db(e.to_string()))
 }

@@ -5,15 +5,17 @@ use tauri::Manager;
 
 use crate::AppKeyStore;
 use crate::domain::executor::{self, DemoTools};
+use crate::domain::experience;
 use crate::domain::gateway::Mode;
 use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
-use crate::infra::{db, store};
+use crate::infra::{db, store, template_zip};
 use crate::models::{
     AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunControlPayload,
     RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
     SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
-    CredentialSetPayload, CredentialRef,
+    CredentialSetPayload, CredentialRef, CorrectionInput, CorrectionRow, EfficiencyReport,
+    TemplateBundle, TemplateCreatePayload, TemplateRow, UpgradeApprovePayload, UpgradeCandidate,
 };
 
 pub(crate) fn db_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
@@ -272,4 +274,144 @@ pub fn credential_remove(
     ks.0.delete(&ref_id)?;
     let conn = open_db(&app)?;
     store::remove_credential_ref(&conn, &ref_id)
+}
+
+// ---- v0.4 经验沉淀 ----
+
+/// 从一条 run 捕获经验模板（仅在实测通过时 validated=1）。
+#[tauri::command]
+pub fn template_create(
+    app: tauri::AppHandle,
+    payload: TemplateCreatePayload,
+) -> AppResult<String> {
+    let conn = open_db(&app)?;
+    let detail = store::run_detail(&conn, &payload.run_id)?;
+    let corrections = store::list_corrections(&conn, None)?;
+    let acc: Vec<serde_json::Value> = detail
+        .acceptance
+        .iter()
+        .map(|a| serde_json::json!({"criterion": a.criterion, "passed": a.passed}))
+        .collect();
+    let bundle = experience::capture_template(
+        &detail.run.status,
+        detail.run.verdict.as_deref(),
+        &payload.name,
+        detail.run.definition_snapshot.as_deref().unwrap_or("{}"),
+        &detail.steps,
+        &acc,
+        &corrections,
+        payload.source_shop.as_deref(),
+    )?;
+    store::save_template(&conn, &bundle)
+}
+
+#[tauri::command]
+pub fn template_list(app: tauri::AppHandle) -> AppResult<Vec<TemplateRow>> {
+    let conn = open_db(&app)?;
+    store::list_templates(&conn)
+}
+
+/// 导出指定模板为 zip 字节（前端触发下载）。
+#[tauri::command]
+pub fn template_export(app: tauri::AppHandle, id: String) -> AppResult<Vec<u8>> {
+    let conn = open_db(&app)?;
+    let rows = store::list_templates(&conn)?;
+    let t = rows
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("模板 {}", id)))?;
+    let bundle = TemplateBundle {
+        manifest_schema: experience::MANIFEST_SCHEMA,
+        name: t.name,
+        validated: t.validated,
+        sop_snapshot: t.sop_snapshot,
+        trajectory_json: t.trajectory_json,
+        corrections_json: t.corrections_json,
+        source_shop: t.source_shop,
+    };
+    template_zip::export_zip(&bundle)
+}
+
+/// 导入 zip：解包 + schema/validated 校验（未实测通过拒绝），通过后落库。
+#[tauri::command]
+pub fn template_import(app: tauri::AppHandle, bytes: Vec<u8>) -> AppResult<String> {
+    let bundle = template_zip::import_zip(&bytes)?;
+    experience::validate_import(&bundle)?;
+    let conn = open_db(&app)?;
+    store::save_template(&conn, &bundle)
+}
+
+#[tauri::command]
+pub fn correction_add(app: tauri::AppHandle, input: CorrectionInput) -> AppResult<i64> {
+    let conn = open_db(&app)?;
+    store::add_correction(&conn, &input.step_id, &input)
+}
+
+#[tauri::command]
+pub fn correction_list(app: tauri::AppHandle, step_id: Option<String>) -> AppResult<Vec<CorrectionRow>> {
+    let conn = open_db(&app)?;
+    store::list_corrections(&conn, step_id.as_deref())
+}
+
+/// owner 升级候选（不自动放权；资金/不可逆恒不可升级）。
+#[tauri::command]
+pub fn upgrade_candidate_list(app: tauri::AppHandle) -> AppResult<Vec<UpgradeCandidate>> {
+    let conn = open_db(&app)?;
+    let steps = store::all_steps(&conn)?;
+    let corrections = store::list_corrections(&conn, None)?;
+    let unsafe_tools: Vec<String> = store::list_tool_specs(&conn)?
+        .into_iter()
+        .filter(|s| s.irreversible || s.risk == "high")
+        .map(|s| s.id)
+        .collect();
+    Ok(experience::upgrade_candidates(
+        &steps,
+        &corrections,
+        &unsafe_tools,
+        experience::UPGRADE_THRESHOLD,
+    ))
+}
+
+/// 人确认/驳回升级候选。框架期只记决定到 note（实际改 owner 属 v0.5 放权，仍须人确认）。
+#[tauri::command]
+pub fn upgrade_approve(app: tauri::AppHandle, payload: UpgradeApprovePayload) -> AppResult<()> {
+    if !payload.approve {
+        return Ok(());
+    }
+    // 复核：若该节点对应工具不可逆/高风险，拒绝自动升级。
+    let conn = open_db(&app)?;
+    let steps = store::all_steps(&conn)?;
+    let node = steps
+        .iter()
+        .find(|s| s.node_id.as_deref() == Some(payload.node_id.as_str()))
+        .ok_or_else(|| AppError::NotFound(format!("节点 {}", payload.node_id)))?;
+    if let Some(ref tool) = node.tool_ref {
+        let spec = store::tool_spec(&conn, tool)?;
+        if spec.irreversible || spec.risk == "high" {
+            return Err(AppError::RiskBlocked("资金/不可逆动作永不升级为 agent".into()));
+        }
+    }
+    // 框架期：决定留痕在 corrections.note，落库由 add_correction 的人审入口完成。
+    Ok(())
+}
+
+#[tauri::command]
+pub fn report_get(app: tauri::AppHandle) -> AppResult<EfficiencyReport> {
+    let conn = open_db(&app)?;
+    let runs_total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let completed = store::count_completed_runs(&conn)?;
+    let steps = store::all_steps(&conn)?;
+    let interventions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM human_gates WHERE decision IS NOT NULL", [], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let checks = store::count_acceptance_checks(&conn)?;
+    Ok(experience::efficiency_report(
+        runs_total as usize,
+        completed,
+        &steps,
+        interventions as usize,
+        checks,
+    ))
 }

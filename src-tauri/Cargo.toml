@@ -21,6 +21,7 @@ serde_json = "1"
 # bundled 自带 SQLite 源码编译，避免各平台系统库版本差异；只对 v0.1 建表够用。
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"

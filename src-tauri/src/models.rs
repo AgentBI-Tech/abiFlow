@@ -56,6 +56,7 @@ pub struct StepRow {
     pub node_type: String,
     pub owner: String,
     pub tool_ref: Option<String>,
+    pub node_id: Option<String>,
     pub status: String,
     pub input_json: Option<String>,
     pub output_json: Option<String>,
@@ -214,6 +215,98 @@ pub struct CredentialSetPayload {
     pub label: Option<String>,
     /// 密钥值：只在内存传给 keystore，绝不落库、不进日志、不回显。
     pub value: String,
+}
+
+// ---- v0.4 经验沉淀 ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateRow {
+    pub id: String,
+    pub name: String,
+    pub sop_snapshot: String,
+    pub trajectory_json: String,
+    pub corrections_json: String,
+    pub source_shop: Option<String>,
+    pub validated: bool,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionRow {
+    pub id: i64,
+    pub step_id: String,
+    pub run_id: String,
+    pub node_type: String,
+    pub original_json: String,
+    pub corrected_json: String,
+    pub note: Option<String>,
+    pub author: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionInput {
+    pub step_id: String,
+    pub original_json: String,
+    pub corrected_json: String,
+    pub note: Option<String>,
+}
+
+/// 模板导出包（§6 zip 内的 manifest/sop/trajectory/corrections/README 的内存表示）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateBundle {
+    pub manifest_schema: i32,
+    pub name: String,
+    pub validated: bool,
+    pub sop_snapshot: String,
+    pub trajectory_json: String,
+    pub corrections_json: String,
+    pub source_shop: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeCandidate {
+    pub node_type: String,
+    pub node_id: String,
+    pub correction_count: usize,
+    pub threshold: usize,
+    /// 是否允许升级：资金/不可逆工具恒为 false。
+    pub eligible: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EfficiencyReport {
+    pub total_runs: usize,
+    pub completed_runs: usize,
+    pub total_steps: usize,
+    pub agent_done_steps: usize,
+    pub automation_rate: f64,
+    pub human_interventions: usize,
+    pub avg_acceptance_rounds: f64,
+    /// 只按步数/次数陈述，不编金额。
+    pub saved_steps_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateCreatePayload {
+    pub run_id: String,
+    pub name: String,
+    pub source_shop: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeApprovePayload {
+    pub node_id: String,
+    pub approve: bool,
 }
 
 // ---- 命令出参 ----

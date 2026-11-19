@@ -122,6 +122,49 @@ export type CredentialRef = {
   label: string | null;
 };
 
+export type TemplateRow = {
+  id: string;
+  name: string;
+  sopSnapshot: string;
+  trajectoryJson: string;
+  correctionsJson: string;
+  sourceShop: string | null;
+  validated: boolean;
+  createdAt: number;
+};
+
+export type CorrectionRow = {
+  id: number;
+  stepId: string;
+  runId: string;
+  nodeType: string;
+  originalJson: string;
+  correctedJson: string;
+  note: string | null;
+  author: string;
+  createdAt: number;
+};
+
+export type UpgradeCandidate = {
+  nodeType: string;
+  nodeId: string;
+  correctionCount: number;
+  threshold: number;
+  eligible: boolean;
+  reason: string;
+};
+
+export type EfficiencyReport = {
+  totalRuns: number;
+  completedRuns: number;
+  totalSteps: number;
+  agentDoneSteps: number;
+  automationRate: number;
+  humanInterventions: number;
+  avgAcceptanceRounds: number;
+  savedStepsNote: string;
+};
+
 export type AppError = { code: string; message: string };
 
 export function dashboardGet(): Promise<DashboardData> {
@@ -132,6 +175,9 @@ export function runGet(runId: string): Promise<RunDetail> {
 }
 export function runStart(sopId: string, input?: unknown): Promise<{ runId: string }> {
   return invoke("run_start", { payload: { sopId, mode: "build", input: input ?? {} } });
+}
+export function runList(sopId?: string, status?: string, limit?: number): Promise<RunRow[]> {
+  return invoke("run_list", { sopId: sopId ?? null, status: status ?? null, limit: limit ?? 30 });
 }
 export function runControl(runId: string, action: string): Promise<string> {
   return invoke("run_control", { payload: { runId, action } });
@@ -165,6 +211,31 @@ export function credentialSet(refId: string, provider: string, label: string | n
 }
 export function credentialRemove(refId: string): Promise<void> {
   return invoke("credential_remove", { refId });
+}
+
+export function templateCreate(runId: string, name: string, sourceShop: string | null): Promise<string> {
+  return invoke("template_create", { payload: { runId, name, sourceShop } });
+}
+export function templateList(): Promise<TemplateRow[]> {
+  return invoke("template_list");
+}
+export function templateExport(id: string): Promise<number[]> {
+  return invoke("template_export", { id });
+}
+export function templateImport(bytes: number[]): Promise<string> {
+  return invoke("template_import", { bytes });
+}
+export function correctionList(stepId: string | null): Promise<CorrectionRow[]> {
+  return invoke("correction_list", { stepId });
+}
+export function upgradeCandidateList(): Promise<UpgradeCandidate[]> {
+  return invoke("upgrade_candidate_list");
+}
+export function upgradeApprove(nodeId: string, approve: boolean): Promise<void> {
+  return invoke("upgrade_approve", { payload: { nodeId, approve } });
+}
+export function reportGet(): Promise<EfficiencyReport> {
+  return invoke("report_get");
 }
 
 export function errMessage(e: unknown): string {

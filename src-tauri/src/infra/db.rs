@@ -3,7 +3,8 @@ use rusqlite::Connection;
 use crate::models::{AppError, AppResult};
 
 const MIGRATION_V1: &str = include_str!("../../migrations/001_init.sql");
-const SCHEMA_VERSION: i64 = 2;
+const MIGRATION_V3: &str = include_str!("../../migrations/003_experience.sql");
+const SCHEMA_VERSION: i64 = 3;
 
 /// v2 要新增的列（table, column, ALTER 语句）。逐列按存在性执行，保证幂等。
 const V2_COLUMNS: &[(&str, &str, &str)] = &[
@@ -46,6 +47,14 @@ fn migrate(conn: &Connection) -> AppResult<()> {
     }
     conn.execute(
         "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (2, CAST(strftime('%s','now') AS INTEGER))",
+        [],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    // v3: corrections 表（全 IF NOT EXISTS，可直接重放）。
+    conn.execute_batch(MIGRATION_V3)
+        .map_err(|e| AppError::Db(format!("迁移 v3 失败：{}", e)))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (3, CAST(strftime('%s','now') AS INTEGER))",
         [],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
@@ -92,21 +101,22 @@ mod tests {
         let conn = open_in_memory().expect("内存库迁移应成功");
         let n = user_table_count(&conn).expect("统计应成功");
         // 12 张业务表（含 schema_meta）
-        assert_eq!(n, 12, "应建 12 张表，实得 {}", n);
+        assert_eq!(n, 13, "应建 13 张表，实得 {}", n);
     }
 
     #[test]
     fn migration_is_idempotent() {
         let conn = open_in_memory().expect("首次迁移");
-        // 重放不应报错：v1 全 IF NOT EXISTS，v2 逐列存在性守卫。
+        // 重放不应报错：v1/v3 全 IF NOT EXISTS，v2 逐列存在性守卫。
         conn.execute_batch(MIGRATION_V1).expect("重放迁移 v1 应成功");
         for (table, column, ddl) in V2_COLUMNS {
             if !column_exists(&conn, table, column).expect("查列") {
                 conn.execute(ddl, []).expect("重放迁移 v2 应成功");
             }
         }
+        conn.execute_batch(MIGRATION_V3).expect("重放迁移 v3 应成功");
         let n = user_table_count(&conn).expect("统计应成功");
-        assert_eq!(n, 12);
+        assert_eq!(n, 13);
     }
 
     #[test]
@@ -134,7 +144,7 @@ mod tests {
         assert!(!nested.parent().unwrap().exists(), "父目录起初不应存在");
         let conn = open(&nested).expect("open 应创建父目录并建表");
         assert!(nested.exists(), "db 文件应生成");
-        assert_eq!(user_table_count(&conn).expect("统计"), 12);
+        assert_eq!(user_table_count(&conn).expect("统计"), 13);
     }
 
     #[test]

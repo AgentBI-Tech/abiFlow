@@ -68,6 +68,15 @@ pub fn run() {
             commands::execution::credential_list,
             commands::execution::credential_set,
             commands::execution::credential_remove,
+            commands::execution::template_create,
+            commands::execution::template_list,
+            commands::execution::template_export,
+            commands::execution::template_import,
+            commands::execution::correction_add,
+            commands::execution::correction_list,
+            commands::execution::upgrade_candidate_list,
+            commands::execution::upgrade_approve,
+            commands::execution::report_get,
         ])
         .run(tauri::generate_context!())
         .expect("ABI-Pilot 启动失败");
@@ -81,6 +90,6 @@ mod tests {
     #[test]
     fn smoke_schema_ready() {
         let conn = infra::db::open_in_memory().expect("建表应成功");
-        assert_eq!(infra::db::user_table_count(&conn).expect("统计"), 12);
+        assert_eq!(infra::db::user_table_count(&conn).expect("统计"), 13);
     }
 }
