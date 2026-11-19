@@ -238,6 +238,28 @@ export function reportGet(): Promise<EfficiencyReport> {
   return invoke("report_get");
 }
 
+export type ToolDefPayload = {
+  id: string;
+  title: string;
+  risk: string;
+  server: string;
+  command: string;
+  scope: Record<string, unknown>;
+  enabled: boolean;
+};
+export function toolUpsert(p: ToolDefPayload): Promise<void> {
+  return invoke("tool_upsert", { payload: p });
+}
+export function toolRemove(id: string): Promise<void> {
+  return invoke("tool_remove", { id });
+}
+export function exampleToolsInstall(): Promise<string[]> {
+  return invoke("example_tools_install");
+}
+export function maintenanceSopInstall(): Promise<string> {
+  return invoke("maintenance_sop_install");
+}
+
 export function errMessage(e: unknown): string {
   if (typeof e === "object" && e !== null && "message" in e) {
     const err = e as AppError;

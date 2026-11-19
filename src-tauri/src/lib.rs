@@ -9,10 +9,10 @@ use std::time::Duration;
 
 use tauri::Manager;
 
-use crate::domain::executor::DemoTools;
 use crate::domain::keystore::{KeyStore, MemoryKeyStore};
 use crate::domain::scheduler;
 use crate::infra::db;
+use crate::infra::tool_engine::ToolEngine;
 
 struct SchedulerStop(Arc<AtomicBool>);
 /// 密钥链实例（框架期为进程内存实现；接真实店铺时替换为 OS 密钥链，trait 不变）。
@@ -25,7 +25,9 @@ pub fn run() {
             let handle = app.handle().clone();
             let stop = Arc::new(AtomicBool::new(false));
             app.manage(SchedulerStop(stop.clone()));
-            app.manage(AppKeyStore(Arc::new(MemoryKeyStore::new())));
+            let ks: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
+            app.manage(AppKeyStore(ks.clone()));
+            let engine = ToolEngine::new(ks);
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(30));
                 if stop.load(Ordering::Relaxed) {
@@ -34,7 +36,7 @@ pub fn run() {
                 if let Ok(dir) = handle.path().app_data_dir() {
                     let path = dir.join("abi-pilot").join("abi.db");
                     if let Ok(conn) = db::open(&path) {
-                        let _ = scheduler::tick(&conn, &DemoTools);
+                        let _ = scheduler::tick(&conn, &engine);
                     }
                 }
             });
@@ -77,6 +79,10 @@ pub fn run() {
             commands::execution::upgrade_candidate_list,
             commands::execution::upgrade_approve,
             commands::execution::report_get,
+            commands::execution::tool_upsert,
+            commands::execution::tool_remove,
+            commands::execution::example_tools_install,
+            commands::execution::maintenance_sop_install,
         ])
         .run(tauri::generate_context!())
         .expect("ABI-Pilot 启动失败");

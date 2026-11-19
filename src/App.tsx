@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
+import CustomToolsPanel from "./components/CustomToolsPanel";
 import {
   dashboardGet,
   demoInstall,
@@ -31,7 +32,7 @@ export default function App() {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"board" | "tools" | "experience">("board");
+  const [tab, setTab] = useState<"board" | "tools" | "experience" | "custom">("board");
 
   const refresh = useCallback(async () => {
     try {
@@ -70,10 +71,11 @@ export default function App() {
     <main className="wrap" data-app="abi-pilot">
       <header>
         <h1>ABI-Pilot</h1>
-        <p className="sub">人机协同电商运营工作台 · v0.4 经验沉淀（本地演示数据，非真实店铺）</p>
+        <p className="sub">人机协同电商运营工作台 · 通用工具（工具即数据，agentbi.tech 为首个示例）</p>
         <div className="tabs">
           <button className={tab === "board" ? "tab on" : "tab"} onClick={() => setTab("board")}>运营看板</button>
           <button className={tab === "tools" ? "tab on" : "tab"} onClick={() => setTab("tools")}>工具与权限</button>
+          <button className={tab === "custom" ? "tab on" : "tab"} onClick={() => setTab("custom")}>自定义工具</button>
           <button className={tab === "experience" ? "tab on" : "tab"} onClick={() => setTab("experience")}>经验沉淀</button>
         </div>
       </header>
@@ -82,6 +84,8 @@ export default function App() {
 
       {tab === "tools" ? (
         <ToolsPanel onError={setErr} />
+      ) : tab === "custom" ? (
+        <CustomToolsPanel onError={setErr} />
       ) : tab === "experience" ? (
         <ExperiencePanel onError={setErr} />
       ) : (

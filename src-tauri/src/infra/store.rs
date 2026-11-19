@@ -1051,3 +1051,40 @@ pub fn all_steps(conn: &Connection) -> AppResult<Vec<StepRow>> {
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::Db(e.to_string()))
 }
+
+/// 返回工具的完整 scope_json（配置驱动执行的依据）。
+pub fn tool_config(conn: &Connection, tool_id: &str) -> AppResult<serde_json::Value> {
+    let scope: String = conn
+        .query_row("SELECT scope_json FROM tools WHERE id=?1", params![tool_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| AppError::Db(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound(format!("工具 {}", tool_id)))?;
+    serde_json::from_str(&scope).map_err(|e| AppError::InvalidInput(format!("scope_json 非法：{}", e)))
+}
+
+/// 新建或更新一个工具定义（工具即数据）。
+pub fn upsert_tool(
+    conn: &Connection,
+    id: &str,
+    server: &str,
+    command: &str,
+    title: &str,
+    risk: &str,
+    scope_json: &str,
+    enabled: bool,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO tools(id,server,command,title,risk,scope_json,enabled) \
+         VALUES(?1,?2,?3,?4,?5,?6,?7) \
+         ON CONFLICT(id) DO UPDATE SET server=?2,command=?3,title=?4,risk=?5,scope_json=?6,enabled=?7",
+        params![id, server, command, title, risk, scope_json, enabled as i64],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+pub fn remove_tool(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM tools WHERE id=?1", params![id])
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}

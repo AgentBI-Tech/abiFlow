@@ -4,18 +4,20 @@ use serde_json::json;
 use tauri::Manager;
 
 use crate::AppKeyStore;
-use crate::domain::executor::{self, DemoTools};
+use crate::domain::executor::{self};
+use crate::domain::examples;
 use crate::domain::experience;
 use crate::domain::gateway::Mode;
 use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
-use crate::infra::{db, store, template_zip};
+use crate::infra::{db, store, template_zip, tool_engine::ToolEngine};
 use crate::models::{
     AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunControlPayload,
     RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
     SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
     CredentialSetPayload, CredentialRef, CorrectionInput, CorrectionRow, EfficiencyReport,
     TemplateBundle, TemplateCreatePayload, TemplateRow, UpgradeApprovePayload, UpgradeCandidate,
+    ToolDefPayload,
 };
 
 pub(crate) fn db_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
@@ -75,9 +77,11 @@ pub fn schedule_set(app: tauri::AppHandle, payload: ScheduleSetPayload) -> AppRe
 #[tauri::command]
 pub fn run_start(
     app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
     payload: RunStartPayload,
 ) -> AppResult<RunStartResult> {
     let conn = open_db(&app)?;
+    let engine = ToolEngine::new(ks.0.clone());
     let mode = payload.mode.as_deref().unwrap_or("build");
     let run_id = executor::start_run(
         &conn,
@@ -85,7 +89,7 @@ pub fn run_start(
         mode,
         "manual",
         payload.input.as_ref().unwrap_or(&json!({})),
-        &DemoTools,
+        &engine,
     )?;
     Ok(RunStartResult { run_id })
 }
@@ -130,8 +134,13 @@ pub fn gate_list(app: tauri::AppHandle, pending_only: Option<bool>) -> AppResult
 }
 
 #[tauri::command]
-pub fn gate_decide(app: tauri::AppHandle, payload: GateDecidePayload) -> AppResult<()> {
+pub fn gate_decide(
+    app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
+    payload: GateDecidePayload,
+) -> AppResult<()> {
     let conn = open_db(&app)?;
+    let engine = ToolEngine::new(ks.0.clone());
     let gate = store::get_gate(&conn, &payload.gate_id)?;
     if gate.decided_at.is_some() {
         return Err(AppError::InvalidInput("人工门已裁决".into()));
@@ -148,7 +157,7 @@ pub fn gate_decide(app: tauri::AppHandle, payload: GateDecidePayload) -> AppResu
             store::update_run_status(&conn, &gate.run_id, "failed", Some(verdict), Some("人工驳回/取消"))?;
         }
         _ => {
-            executor::resume_after_gate(&conn, &gate.run_id, &DemoTools)?;
+            executor::resume_after_gate(&conn, &gate.run_id, &engine)?;
         }
     }
     Ok(())
@@ -163,9 +172,10 @@ pub fn dashboard_get(app: tauri::AppHandle) -> AppResult<DashboardData> {
 }
 
 #[tauri::command]
-pub fn scheduler_tick(app: tauri::AppHandle) -> AppResult<SchedulerTickResult> {
+pub fn scheduler_tick(app: tauri::AppHandle, ks: tauri::State<'_, AppKeyStore>) -> AppResult<SchedulerTickResult> {
     let conn = open_db(&app)?;
-    scheduler::tick(&conn, &DemoTools)
+    let engine = ToolEngine::new(ks.0.clone());
+    scheduler::tick(&conn, &engine)
 }
 
 #[tauri::command]
@@ -414,4 +424,41 @@ pub fn report_get(app: tauri::AppHandle) -> AppResult<EfficiencyReport> {
         interventions as usize,
         checks,
     ))
+}
+
+// ---- v0.5 自定义工具（工具即数据）----
+
+/// 新增/更新一个自定义 HTTP 工具；scope 决定行为，改配置即改工具，无需动核心。
+#[tauri::command]
+pub fn tool_upsert(app: tauri::AppHandle, payload: ToolDefPayload) -> AppResult<()> {
+    if payload.id.is_empty() || !matches!(payload.scope.get("kind").and_then(|v| v.as_str()), Some("http") | Some("builtin")) {
+        return Err(AppError::InvalidInput("工具 id 不得为空，kind 需为 http/builtin".into()));
+    }
+    let conn = open_db(&app)?;
+    let scope = serde_json::to_string(&payload.scope)
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    store::upsert_tool(
+        &conn, &payload.id, &payload.server, &payload.command, &payload.title,
+        &payload.risk, &scope, payload.enabled,
+    )
+}
+
+#[tauri::command]
+pub fn tool_remove(app: tauri::AppHandle, id: String) -> AppResult<()> {
+    let conn = open_db(&app)?;
+    store::remove_tool(&conn, &id)
+}
+
+/// 安装 agentbi.tech 示例工具组（用户可改可删），用于「第一个使用者」的每日维护。
+#[tauri::command]
+pub fn example_tools_install(app: tauri::AppHandle) -> AppResult<Vec<String>> {
+    let conn = open_db(&app)?;
+    examples::install_agentbi_examples(&conn)
+}
+
+/// 安装「每日维护 agentbi.tech」示例 SOP（可改可删，作为模板导出）。
+#[tauri::command]
+pub fn maintenance_sop_install(app: tauri::AppHandle) -> AppResult<String> {
+    let conn = open_db(&app)?;
+    examples::install_maintenance_sop(&conn)
 }

@@ -9,16 +9,17 @@ use crate::domain::sop::{eval_condition, NodeType, SopDefinition};
 use crate::infra::store::{self, GateState};
 use crate::models::{new_id, now_secs, AppError, AppResult};
 
-/// 工具执行器抽象（v0.2 用内置只读 demo 工具；v0.3 换成 MCP gateway，不动 executor）。
+/// 工具执行器：配置驱动。`scope` 是 tools.scope_json 的解析结果，
+/// 决定工具行为（builtin demo 或通用 HTTP），执行器不绑定任何具体站点。
 pub trait ToolRunner {
-    fn run(&self, tool: &str, args: &Value) -> AppResult<Value>;
+    fn run(&self, tool: &str, args: &Value, scope: &Value) -> AppResult<Value>;
 }
 
-/// 内置演示工具：只读、合成数据、明确标注 synthetic，不连任何真实店铺/支付。
+/// 内置演示工具（kind=builtin）：只读、合成数据、不连真实店铺/支付。供测试与未配置 scope 的兜底。
 pub struct DemoTools;
 
 impl ToolRunner for DemoTools {
-    fn run(&self, tool: &str, args: &Value) -> AppResult<Value> {
+    fn run(&self, tool: &str, args: &Value, _scope: &Value) -> AppResult<Value> {
         match tool {
             "demo:check_anomalies" => {
                 let n = args.get("anomalies").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -29,7 +30,7 @@ impl ToolRunner for DemoTools {
                     "checked_at": now_secs()
                 }))
             }
-            _ => Err(AppError::McpUnavailable(format!("无此演示工具：{}", tool))),
+            _ => Err(AppError::McpUnavailable(format!("无此内置工具：{}", tool))),
         }
     }
 }
@@ -255,7 +256,8 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner) -> AppRe
 
                 let args = node.config.get("args").cloned().unwrap_or_else(|| json!({}));
                 store::update_step(conn, &step_id, "running", None, None)?;
-                let raw = tools.run(tool, &args)?;
+                let scope = store::tool_config(conn, tool)?;
+                let raw = tools.run(tool, &args, &scope)?;
                 let safe = redact_value(&raw);
                 let out_str = serde_json::to_string(&safe).unwrap_or_else(|_| "{}".into());
                 let in_str = serde_json::to_string(&redact_value(&args)).unwrap_or_else(|_| "{}".into());

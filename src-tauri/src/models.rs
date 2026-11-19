@@ -309,6 +309,20 @@ pub struct UpgradeApprovePayload {
     pub approve: bool,
 }
 
+/// 自定义工具定义（工具即数据，用户可改）。kind=builtin|http。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolDefPayload {
+    pub id: String,
+    pub title: String,
+    pub risk: String,
+    pub server: String,
+    pub command: String,
+    /// 完整工具配置 JSON：{kind, method, url, headers?, query?, body?, timeout_s?, plane?, read_only?}
+    pub scope: Value,
+    pub enabled: bool,
+}
+
 // ---- 命令出参 ----
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
