@@ -1,0 +1,25 @@
+[package]
+name = "abi-pilot"
+version = "0.1.0"
+description = "ABI-Pilot - human-AI collaboration desktop workbench for e-commerce operations"
+authors = ["ABI-Pilot"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "abi_pilot_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# bundled 自带 SQLite 源码编译，避免各平台系统库版本差异；只对 v0.1 建表够用。
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

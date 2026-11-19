@@ -1,0 +1,21 @@
+# Node / frontend build
+node_modules/
+dist/
+.vite/
+
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/
+
+# Env & secrets (values never committed; credentials live in OS keychain)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
