@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// 前端展示用的应用信息（app_info 命令返回）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -8,6 +9,182 @@ pub struct AppInfo {
     pub version: String,
     pub db_path: String,
     pub table_count: usize,
+}
+
+// ---- v0.2 执行闭环的数据传输对象（对齐实现设计 §2 / §3.1） ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SopRow {
+    pub id: String,
+    pub name: String,
+    pub version: i32,
+    pub trigger_json: String,
+    pub risk: String,
+    pub owner_policy: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRow {
+    pub id: String,
+    pub sop_id: String,
+    pub sop_version: i32,
+    pub status: String,
+    pub mode: String,
+    pub trigger_by: String,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub verdict: Option<String>,
+    pub note: Option<String>,
+    pub definition_snapshot: Option<String>,
+    pub current_node: Option<String>,
+    pub outputs_json: String,
+    pub branch_skipped: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepRow {
+    pub id: String,
+    pub run_id: String,
+    pub seq: i32,
+    pub node_type: String,
+    pub owner: String,
+    pub tool_ref: Option<String>,
+    pub status: String,
+    pub input_json: Option<String>,
+    pub output_json: Option<String>,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateRow {
+    pub id: String,
+    pub run_id: String,
+    pub step_id: String,
+    pub reason: String,
+    pub prompt: String,
+    pub payload_json: Option<String>,
+    pub requested_at: i64,
+    pub decided_at: Option<i64>,
+    pub decision: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptanceRow {
+    pub id: i64,
+    pub run_id: String,
+    pub criterion: String,
+    pub passed: bool,
+    pub checked_by: String,
+    pub note: Option<String>,
+    pub checked_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDetail {
+    pub run: RunRow,
+    pub steps: Vec<StepRow>,
+    pub gates: Vec<GateRow>,
+    pub acceptance: Vec<AcceptanceRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleInfo {
+    pub sop_id: String,
+    pub sop_name: String,
+    pub next_run_at: Option<i64>,
+    pub last_run_at: Option<i64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardData {
+    pub sops: Vec<SopRow>,
+    pub runs: Vec<RunRow>,
+    pub pending_gates: Vec<GateRow>,
+    pub schedules: Vec<ScheduleInfo>,
+    pub tool_count: usize,
+}
+
+// ---- 命令入参 ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SopUpsertPayload {
+    pub id: Option<String>,
+    pub name: String,
+    pub trigger_json: String,
+    pub risk: String,
+    pub owner_policy: String,
+    pub definition: Value,
+    pub expect_version: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStartPayload {
+    pub sop_id: String,
+    pub mode: Option<String>,
+    pub input: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunControlPayload {
+    pub run_id: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateDecidePayload {
+    pub gate_id: String,
+    pub decision: String,
+    pub note: Option<String>,
+    pub payload: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleSetPayload {
+    pub sop_id: String,
+    pub enabled: bool,
+    pub interval_secs: Option<i64>,
+}
+
+// ---- 命令出参 ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SopUpsertResult {
+    pub id: String,
+    pub version: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStartResult {
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerTickResult {
+    pub started: Vec<String>,
+    pub errors: Vec<String>,
 }
 
 /// 统一错误：前端按 code 决定提示与跳转（对齐实现设计 §3.1）。
@@ -55,3 +232,24 @@ impl Serialize for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+/// 生成带前缀的本地 id（时间戳纳秒 + 原子计数，足以单机去重）。
+pub fn new_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{:x}-{:x}", prefix, ts, n)
+}
+
+pub fn now_secs() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}

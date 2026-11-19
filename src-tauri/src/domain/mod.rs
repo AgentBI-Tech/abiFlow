@@ -1,2 +1,5 @@
-// v0.1 暂不实现领域逻辑；占位以便 cargo 结构与实现设计 §1 对齐。
-// v0.2 起在此加入 sop_engine / scheduler / executor / reviewer / mcp_gateway / experience / audit。
+// 领域层：执行闭环逻辑，尽量与 UI/网络解耦，cargo test 可测。
+pub mod audit;
+pub mod executor;
+pub mod scheduler;
+pub mod sop;

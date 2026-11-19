@@ -3,7 +3,17 @@ use rusqlite::Connection;
 use crate::models::{AppError, AppResult};
 
 const MIGRATION_V1: &str = include_str!("../../migrations/001_init.sql");
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+
+/// v2 要新增的列（table, column, ALTER 语句）。逐列按存在性执行，保证幂等。
+const V2_COLUMNS: &[(&str, &str, &str)] = &[
+    ("runs", "definition_snapshot", "ALTER TABLE runs ADD COLUMN definition_snapshot TEXT"),
+    ("runs", "current_node", "ALTER TABLE runs ADD COLUMN current_node TEXT"),
+    ("runs", "outputs_json", "ALTER TABLE runs ADD COLUMN outputs_json TEXT NOT NULL DEFAULT '{}'"),
+    ("runs", "branch_skipped", "ALTER TABLE runs ADD COLUMN branch_skipped TEXT NOT NULL DEFAULT '[]'"),
+    ("steps", "node_id", "ALTER TABLE steps ADD COLUMN node_id TEXT"),
+    ("schedules", "interval_secs", "ALTER TABLE schedules ADD COLUMN interval_secs INTEGER NOT NULL DEFAULT 86400"),
+];
 
 /// 打开（或创建）数据库并执行幂等迁移。
 pub fn open(path: &Path) -> AppResult<Connection> {
@@ -26,7 +36,19 @@ pub fn open_in_memory() -> AppResult<Connection> {
 
 fn migrate(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(MIGRATION_V1)
-        .map_err(|e| AppError::Db(format!("迁移失败：{}", e)))?;
+        .map_err(|e| AppError::Db(format!("迁移 v1 失败：{}", e)))?;
+    // v2: 逐列 ADD COLUMN（SQLite 无 IF NOT EXISTS），按列存在性守卫，保证幂等重放。
+    for (table, column, ddl) in V2_COLUMNS {
+        if !column_exists(conn, table, column)? {
+            conn.execute(ddl, [])
+                .map_err(|e| AppError::Db(format!("迁移 v2 失败（{}）：{}", column, e)))?;
+        }
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (2, CAST(strftime('%s','now') AS INTEGER))",
+        [],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
     let v: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
         .map_err(|e| AppError::Db(e.to_string()))?;
@@ -36,6 +58,18 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         )));
     }
     Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> AppResult<bool> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| AppError::Db(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(names.iter().any(|n| n == column))
 }
 
 /// 统计用户表数量（排除 sqlite_ 内部表），app_info 用。
@@ -64,8 +98,13 @@ mod tests {
     #[test]
     fn migration_is_idempotent() {
         let conn = open_in_memory().expect("首次迁移");
-        // 重放同一脚本不应报错（IF NOT EXISTS + INSERT OR IGNORE）
-        conn.execute_batch(MIGRATION_V1).expect("重放迁移应成功");
+        // 重放不应报错：v1 全 IF NOT EXISTS，v2 逐列存在性守卫。
+        conn.execute_batch(MIGRATION_V1).expect("重放迁移 v1 应成功");
+        for (table, column, ddl) in V2_COLUMNS {
+            if !column_exists(&conn, table, column).expect("查列") {
+                conn.execute(ddl, []).expect("重放迁移 v2 应成功");
+            }
+        }
         let n = user_table_count(&conn).expect("统计应成功");
         assert_eq!(n, 12);
     }
