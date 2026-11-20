@@ -3,6 +3,7 @@ import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
 import LlmPanel from "./components/LlmPanel";
+import SopCanvas from "./components/SopCanvas";
 import {
   dashboardGet,
   demoInstall,
@@ -35,7 +36,8 @@ export default function App() {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"board" | "tools" | "custom" | "experience" | "llm">("board");
+  const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm">("board");
+  const [selCanvasSop, setSelCanvasSop] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -77,6 +79,7 @@ export default function App() {
         <p className="sub">人机协同电商运营工作台 · 通用工具（工具即数据，agentbi.tech 为首个示例）</p>
         <div className="tabs">
           <button className={tab === "board" ? "tab on" : "tab"} onClick={() => setTab("board")}>运营看板</button>
+          <button className={tab === "canvas" ? "tab on" : "tab"} onClick={() => setTab("canvas")}>SOP 画布</button>
           <button className={tab === "tools" ? "tab on" : "tab"} onClick={() => setTab("tools")}>工具与权限</button>
           <button className={tab === "custom" ? "tab on" : "tab"} onClick={() => setTab("custom")}>自定义工具</button>
           <button className={tab === "experience" ? "tab on" : "tab"} onClick={() => setTab("experience")}>经验沉淀</button>
@@ -86,7 +89,28 @@ export default function App() {
 
       {err && <p className="err" data-testid="error">{err}</p>}
 
-      {tab === "tools" ? (
+      {tab === "canvas" ? (
+        !data ? <p>加载中…</p> : (
+          <>
+            <section className="actions">
+              <select value={selCanvasSop} onChange={(e) => setSelCanvasSop(e.target.value)}>
+                <option value="">选一条 SOP 查看画布</option>
+                {data.sops.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name} · v{s.version}</option>
+                ))}
+              </select>
+            </section>
+            {selCanvasSop ? (
+              (() => {
+                const sop = data.sops.find((s) => s.id === selCanvasSop);
+                return sop ? <SopCanvas sop={sop} /> : <p className="empty">SOP 不存在。</p>;
+              })()
+            ) : (
+              <p className="empty">先选一条 SOP。还没有 SOP 的话，去「运营看板」点「安装演示 SOP」。</p>
+            )}
+          </>
+        )
+      ) : tab === "tools" ? (
         <ToolsPanel onError={setErr} />
       ) : tab === "custom" ? (
         <CustomToolsPanel onError={setErr} />
