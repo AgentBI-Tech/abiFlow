@@ -139,6 +139,49 @@ export default function App() {
             <section className="card"><p className="empty">还没有 SOP，点「安装演示 SOP」开始。</p></section>
           )}
 
+          <section className="card" data-testid="board-summary">
+            <h2>完成度看板</h2>
+            <div className="row board-periods">
+              {[data.board.day, data.board.week].map((p) => (
+                <div key={p.label} className="board-period">
+                  <strong>{p.label}</strong>
+                  <span>共 {p.total}</span>
+                  <span>完成 {p.done}</span>
+                  <span>进行中 {p.running}</span>
+                  <span>等人工 {p.waitHuman}</span>
+                  <span>打回 {p.rejected}</span>
+                  <span>失败 {p.failed}</span>
+                  <span>取消 {p.cancelled}</span>
+                </div>
+              ))}
+            </div>
+            <h3>按 SOP 聚合（累计）</h3>
+            <table className="board-table">
+              <thead><tr><th>SOP</th><th>总</th><th>完成</th><th>等人工</th><th>失败</th></tr></thead>
+              <tbody>
+                {data.board.bySop.map((g) => (
+                  <tr key={g.key} data-board-sop={g.key}>
+                    <td>{g.label}</td><td>{g.total}</td><td>{g.done}</td><td>{g.waitHuman}</td><td>{g.failed}</td>
+                  </tr>
+                ))}
+                {data.board.bySop.length === 0 && <tr><td colSpan={5} className="empty">暂无运行记录</td></tr>}
+              </tbody>
+            </table>
+            <h3>按风险分类聚合（累计，risk 维度）</h3>
+            <table className="board-table">
+              <thead><tr><th>风险</th><th>总</th><th>完成</th><th>等人工</th><th>失败</th></tr></thead>
+              <tbody>
+                {data.board.byRisk.map((g) => (
+                  <tr key={g.key} data-board-risk={g.key}>
+                    <td>{g.key}</td><td>{g.total}</td><td>{g.done}</td><td>{g.waitHuman}</td><td>{g.failed}</td>
+                  </tr>
+                ))}
+                {data.board.byRisk.length === 0 && <tr><td colSpan={5} className="empty">暂无运行记录</td></tr>}
+              </tbody>
+            </table>
+            <p className="sub-row" style={{ marginTop: 10 }}>{data.board.scopeNote}</p>
+          </section>
+
           <section className="card">
             <h2>SOP 列表</h2>
             <ul className="list">

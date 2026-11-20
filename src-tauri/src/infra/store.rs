@@ -663,12 +663,17 @@ pub fn dashboard(conn: &Connection) -> AppResult<DashboardData> {
             .map_err(|e| AppError::Db(e.to_string()))?;
         n as usize
     };
+    let sops = list_sops(conn, false)?;
+    // 看板聚合取足够多的 run（累计分组 + 本周窗口），从本地事实算，不造数。
+    let board_runs = list_runs(conn, None, None, 2000)?;
+    let board = board::aggregate(&board_runs, &sops, now_secs());
     Ok(DashboardData {
-        sops: list_sops(conn, false)?,
         runs: list_runs(conn, None, None, 30)?,
         pending_gates: list_gates(conn, true)?,
         schedules,
         tool_count,
+        sops,
+        board,
     })
 }
 
@@ -703,6 +708,7 @@ pub fn gate_state_for_step(conn: &Connection, step_id: &str) -> AppResult<GateSt
 
 // ---- v0.3 工具授权（gateway 用）----
 
+use crate::domain::board;
 use crate::domain::gateway::{Decision, Mode, ToolGrant, ToolSpec};
 
 /// 从 tools 表构造 ToolSpec；plane/requires_approval/irreversible 从 scope_json 解析，

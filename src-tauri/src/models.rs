@@ -113,6 +113,44 @@ pub struct ScheduleInfo {
     pub cron_expr: Option<String>,
 }
 
+// ---- v0.2 基础看板：日/周 + 按 SOP / 分类聚合（纯本地事实，不跨店比绝对值）----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardPeriodStats {
+    pub label: String,
+    pub total: usize,
+    pub done: usize,
+    pub running: usize,
+    pub wait_human: usize,
+    pub rejected: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupStat {
+    pub key: String,
+    pub label: String,
+    pub total: usize,
+    pub done: usize,
+    pub wait_human: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardSummary {
+    pub day: BoardPeriodStats,
+    pub week: BoardPeriodStats,
+    /// 按 SOP 聚合（key=sop_id，label=SOP 名）。
+    pub by_sop: Vec<GroupStat>,
+    /// 按分类聚合（现有 risk 维度：low/medium/high，不新增分类字段）。
+    pub by_risk: Vec<GroupStat>,
+    pub scope_note: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardData {
@@ -121,6 +159,8 @@ pub struct DashboardData {
     pub pending_gates: Vec<GateRow>,
     pub schedules: Vec<ScheduleInfo>,
     pub tool_count: usize,
+    /// 日/周与分类聚合（v0.2 基础看板）。
+    pub board: BoardSummary,
 }
 
 // ---- 命令入参 ----

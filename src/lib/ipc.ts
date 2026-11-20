@@ -87,12 +87,41 @@ export type ScheduleInfo = {
   cronExpr: string | null;
 };
 
+export type BoardPeriodStats = {
+  label: string;
+  total: number;
+  done: number;
+  running: number;
+  waitHuman: number;
+  rejected: number;
+  failed: number;
+  cancelled: number;
+};
+
+export type GroupStat = {
+  key: string;
+  label: string;
+  total: number;
+  done: number;
+  waitHuman: number;
+  failed: number;
+};
+
+export type BoardSummary = {
+  day: BoardPeriodStats;
+  week: BoardPeriodStats;
+  bySop: GroupStat[];
+  byRisk: GroupStat[];
+  scopeNote: string;
+};
+
 export type DashboardData = {
   sops: SopRow[];
   runs: RunRow[];
   pendingGates: GateRow[];
   schedules: ScheduleInfo[];
   toolCount: number;
+  board: BoardSummary;
 };
 
 export type SchedulerTickResult = {
