@@ -45,6 +45,9 @@ button.close { margin-left: auto; }
 .steps > li { margin: 4px 0; }
 .steps pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px; font-size: 11px; overflow-x: auto; }
 
+.reuse-form { border: 1px dashed #94a3b8; border-radius: 8px; padding: 12px; margin-top: 12px; background: #f8fafc; }
+.reuse-form code { background: #e2e8f0; }
+
 /* 完成度看板（v0.2 基础看板） */
 .board-periods { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .board-period { display: flex; flex-direction: column; gap: 2px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #475569; min-width: 130px; }

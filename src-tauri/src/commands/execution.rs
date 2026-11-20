@@ -8,6 +8,7 @@ use crate::AppLlm;
 use crate::domain::executor::{self};
 use crate::domain::examples;
 use crate::domain::experience;
+use crate::domain::template_reuse;
 use crate::domain::gateway::Mode;
 use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
@@ -17,7 +18,7 @@ use crate::models::{
     RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
     SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
     CredentialSetPayload, CredentialRef, CorrectionInput, CorrectionRow, EfficiencyReport,
-    TemplateBundle, TemplateCreatePayload, TemplateRow, UpgradeApprovePayload, UpgradeCandidate,
+    TemplateBundle, TemplateCreatePayload, TemplateRow, TemplateReusePayload, UpgradeApprovePayload, UpgradeCandidate,
     OwnerDecisionRow, ToolDefPayload,
 };
 
@@ -362,6 +363,55 @@ pub fn template_import(app: tauri::AppHandle, bytes: Vec<u8>) -> AppResult<Strin
     experience::validate_import(&bundle)?;
     let conn = open_db(&app)?;
     store::save_template(&conn, &bundle)
+}
+
+/// 取模板定义里声明的可换参数 {{param:*}} 列表，供前端生成输入框。
+#[tauri::command]
+pub fn template_params(app: tauri::AppHandle, template_id: String) -> AppResult<Vec<String>> {
+    let conn = open_db(&app)?;
+    let t = store::list_templates(&conn)?
+        .into_iter()
+        .find(|t| t.id == template_id)
+        .ok_or_else(|| AppError::NotFound(format!("模板 {}", template_id)))?;
+    let def: serde_json::Value = serde_json::from_str(&t.sop_snapshot)
+        .map_err(|e| AppError::InvalidInput(format!("模板定义非法：{}", e)))?;
+    Ok(template_reuse::collect_params(&def))
+}
+
+/// 换参复用：从 validated 模板 + 参数生成一条新 SOP（换店铺只换参数，不重编流程）。
+/// 未实测通过的模板不得复用；资金/不可逆动作不因换参自动放行（owner_policy 继承模板，不提权）。
+#[tauri::command]
+pub fn template_reuse(
+    app: tauri::AppHandle,
+    payload: TemplateReusePayload,
+) -> AppResult<SopUpsertResult> {
+    if payload.name.trim().is_empty() {
+        return Err(AppError::InvalidInput("新 SOP 名称不得为空".into()));
+    }
+    let conn = open_db(&app)?;
+    let t = store::list_templates(&conn)?
+        .into_iter()
+        .find(|t| t.id == payload.template_id)
+        .ok_or_else(|| AppError::NotFound(format!("模板 {}", payload.template_id)))?;
+    if !t.validated {
+        return Err(AppError::InvalidInput("模板未实测通过（validated=0），不得复用上岗".into()));
+    }
+    let def: serde_json::Value = serde_json::from_str(&t.sop_snapshot)
+        .map_err(|e| AppError::InvalidInput(format!("模板定义非法：{}", e)))?;
+    // 替换 {{param:*}}；缺参/未闭合由 apply_params 报错。
+    let params_map: serde_json::Map<String, serde_json::Value> = payload.params.into_iter().collect();
+    let new_def = template_reuse::apply_params(&def, &params_map)?;
+    let upsert = SopUpsertPayload {
+        id: None, // 生成新 id，不动原模板/原 SOP
+        name: payload.name,
+        trigger_json: "{}".into(),
+        risk: "low".into(),
+        owner_policy: "hybrid".into(),
+        definition: new_def,
+        expect_version: None,
+    };
+    let (id, version) = store::upsert_sop(&conn, &upsert)?;
+    Ok(SopUpsertResult { id, version })
 }
 
 #[tauri::command]

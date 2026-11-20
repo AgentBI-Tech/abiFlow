@@ -87,6 +87,8 @@ pub fn run() {
             commands::execution::template_list,
             commands::execution::template_export,
             commands::execution::template_import,
+            commands::execution::template_params,
+            commands::execution::template_reuse,
             commands::execution::correction_add,
             commands::execution::correction_list,
             commands::execution::upgrade_candidate_list,

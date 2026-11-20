@@ -10,6 +10,8 @@ import {
   templateExport,
   templateImport,
   templateList,
+  templateParams,
+  templateReuse,
   upgradeApprove,
   upgradeCandidateList,
   runList,
@@ -48,6 +50,11 @@ export default function ExperiencePanel({ onError }: { onError: (s: string) => v
   const [corrOriginal, setCorrOriginal] = useState("{}");
   const [corrCorrected, setCorrCorrected] = useState("{}");
   const [corrNote, setCorrNote] = useState("");
+  // 模板换参复用：选中模板 → 拉它的 {{param:*}} → 填值 → 生成新 SOP。
+  const [reuseTpl, setReuseTpl] = useState("");
+  const [reuseNames, setReuseNames] = useState<string[]>([]);
+  const [reuseValues, setReuseValues] = useState<Record<string, string>>({});
+  const [reuseName, setReuseName] = useState("");
 
   const load = async () => {
     try {
@@ -76,6 +83,19 @@ export default function ExperiencePanel({ onError }: { onError: (s: string) => v
     try { await fn(); await load(); } catch (e) { onError(errMessage(e)); }
     finally { setBusy(""); }
   };
+
+  async function openReuse(id: string) {
+    setBusy("取参数");
+    try {
+      const names = await templateParams(id);
+      setReuseTpl(id);
+      setReuseNames(names);
+      setReuseValues({});
+      setReuseName("");
+      onError("");
+    } catch (e) { onError(errMessage(e)); }
+    finally { setBusy(""); }
+  }
 
   const doneRuns = runs.filter((r) => r.status === "done");
 
@@ -112,11 +132,41 @@ export default function ExperiencePanel({ onError }: { onError: (s: string) => v
                   const bytes = await templateExport(t.id);
                   setImportText(bytesToBase64(bytes));
                 })}>导出(base64)</button>
+                <button disabled={!!busy || !t.validated} onClick={() => openReuse(t.id)}>
+                  换参复用{t.validated ? "" : "（未验证不可用）"}
+                </button>
               </div>
             </li>
           ))}
           {templates.length === 0 && <li className="empty">暂无模板。</li>}
         </ul>
+        {reuseTpl && (
+          <div className="reuse-form" data-testid="template-reuse-form">
+            <p className="sub-row">换参复用：只替换模板里的 <code>{'{{param:name}}'}</code> 占位符，流程结构不变。新 SOP 的触发/风险/归属取默认值，请到看板复核。</p>
+            <div className="row">
+              <input className="wide" placeholder="新 SOP 名称" value={reuseName} onChange={(e) => setReuseName(e.target.value)} />
+            </div>
+            {reuseNames.length === 0 ? (
+              <p className="sub-row">该模板没有可换参数（直接整流程复用）。</p>
+            ) : reuseNames.map((name) => (
+              <div className="row" key={name} style={{ marginTop: 6 }}>
+                <label style={{ minWidth: 140 }}>{name}</label>
+                <input className="wide" placeholder={`输入 ${name}`} value={reuseValues[name] ?? ""}
+                  onChange={(e) => setReuseValues((v) => ({ ...v, [name]: e.target.value }))} />
+              </div>
+            ))}
+            <div className="row" style={{ marginTop: 10 }}>
+              <button disabled={!!busy || !reuseName.trim() || reuseNames.some((n) => !(reuseValues[n] ?? "").trim())}
+                onClick={() => act("复用", async () => {
+                  const params: Record<string, string> = {};
+                  for (const n of reuseNames) params[n] = reuseValues[n] ?? "";
+                  await templateReuse(reuseTpl, reuseName.trim(), params);
+                  setReuseTpl(""); setReuseNames([]); setReuseValues({}); setReuseName("");
+                })}>生成新 SOP</button>
+              <button disabled={!!busy} onClick={() => { setReuseTpl(""); setReuseNames([]); setReuseValues({}); setReuseName(""); }}>取消</button>
+            </div>
+          </div>
+        )}
         <div className="row" style={{ marginTop: 12 }}>
           <input className="wide" placeholder="粘贴 zip 的 base64 导入" value={importText}
             onChange={(e) => setImportText(e.target.value)} />

@@ -374,6 +374,16 @@ pub struct TemplateCreatePayload {
     pub source_shop: Option<String>,
 }
 
+/// 模板换参复用（v0.4）：从 validated 模板 + 参数生成一条新 SOP。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateReusePayload {
+    pub template_id: String,
+    pub name: String,
+    /// 参数名 → 值（字符串/数字/布尔）。必须覆盖模板里的全部 {{param:*}}。
+    pub params: std::collections::HashMap<String, Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeApprovePayload {

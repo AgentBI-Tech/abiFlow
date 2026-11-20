@@ -289,6 +289,14 @@ export function templateExport(id: string): Promise<number[]> {
 export function templateImport(bytes: number[]): Promise<string> {
   return invoke("template_import", { bytes });
 }
+/** 取模板定义里声明的可换参数 {{param:*}}。 */
+export function templateParams(templateId: string): Promise<string[]> {
+  return invoke("template_params", { templateId });
+}
+/** 换参复用：从 validated 模板 + 参数生成一条新 SOP。 */
+export function templateReuse(templateId: string, name: string, params: Record<string, string | number | boolean>): Promise<{ id: string; version: number }> {
+  return invoke("template_reuse", { payload: { templateId, name, params } });
+}
 export function correctionList(stepId: string | null): Promise<CorrectionRow[]> {
   return invoke("correction_list", { stepId });
 }

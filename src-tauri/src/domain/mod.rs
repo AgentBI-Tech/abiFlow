@@ -6,6 +6,7 @@ pub mod examples;
 pub mod executor;
 pub mod experience;
 pub mod gateway;
+pub mod template_reuse;
 pub mod keystore;
 pub mod llm;
 pub mod reviewer;
