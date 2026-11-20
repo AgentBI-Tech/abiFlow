@@ -134,6 +134,44 @@ pub fn install_maintenance_sop(conn: &rusqlite::Connection) -> AppResult<String>
     Ok(sop_id.into())
 }
 
+/// 放权演示 SOP：一个 human-owned 的 agent_step，用来端到端演示「修正累积 → 候选 → 人确认放权」。
+/// 不依赖任何外部工具/店铺；仅本地 Mock 推理，可导出为模板。安装幂等（已存在则不覆盖用户改动）。
+pub fn delegation_demo_definition() -> Value {
+    json!({
+        "version": 1,
+        "nodes": [
+            {"id":"n0","type":"start","config":{}},
+            {"id":"n1","type":"agent_step","config":{"goal":"汇总上游并给出建议","owner":"human"}},
+            {"id":"n2","type":"acceptance","config":{"criteria":["steps.n1.mock == true"]}},
+            {"id":"n3","type":"end","config":{}}
+        ],
+        "edges": [
+            {"from":"n0","to":"n1"},
+            {"from":"n1","to":"n2"},
+            {"from":"n2","to":"n3"}
+        ]
+    })
+}
+
+/// 安装放权演示 SOP（不存在则建）。
+pub fn install_delegation_demo(conn: &rusqlite::Connection) -> AppResult<String> {
+    let sop_id = "sop-delegation-demo";
+    let existing: Option<i32> = conn
+        .query_row("SELECT version FROM sops WHERE id=?1", [sop_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| crate::models::AppError::Db(e.to_string()))?;
+    if existing.is_none() {
+        let now = crate::models::now_secs();
+        conn.execute(
+            "INSERT INTO sops(id,name,version,trigger_json,risk,owner_policy,enabled,created_at,updated_at,definition) \
+             VALUES(?1,'放权演示（本地 Mock）',1,'{}','low','hybrid',1,?2,?2,?3)",
+            params![sop_id, now, delegation_demo_definition().to_string()],
+        )
+        .map_err(|e| crate::models::AppError::Db(e.to_string()))?;
+    }
+    Ok(sop_id.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +197,19 @@ mod tests {
         let all = store::list_tool_specs(&c).unwrap();
         assert!(all.iter().any(|s| s.id == "agentbi:health"));
     }
+    #[test]
+    fn delegation_demo_installs_with_human_owned_step() {
+        use crate::domain::sop::SopDefinition;
+        let c = db::open_in_memory().unwrap();
+        let id = install_delegation_demo(&c).unwrap();
+        assert_eq!(id, "sop-delegation-demo");
+        let def: SopDefinition = serde_json::from_value(delegation_demo_definition()).unwrap();
+        assert_eq!(crate::domain::sop::effective_owner(def.node("n1").unwrap()), "human");
+        // 幂等：重复安装不报错、不新增 SOP。
+        install_delegation_demo(&c).unwrap();
+        assert_eq!(store::list_sops(&c, false).unwrap().len(), 1);
+    }
+
     #[test]
     fn maintenance_sop_validates_and_installs() {
         use crate::domain::sop::SopDefinition;

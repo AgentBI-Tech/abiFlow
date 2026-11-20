@@ -26,6 +26,20 @@ pub struct SopNode {
     pub config: Value,
 }
 
+/// 节点的有效 owner（v0.5）：
+/// - human_gate / acceptance 恒为 human（结构性人工检查点，永不自动放行）。
+/// - agent_step / mcp_tool 可由 config.owner 指定 human|agent，默认 agent。
+///   标注 human 表示「该步产出需人确认后才作数」，是可被经验放权升级的对象。
+pub fn effective_owner(node: &SopNode) -> &'static str {
+    match node.node_type {
+        NodeType::HumanGate | NodeType::Acceptance => "human",
+        _ => match node.config.get("owner").and_then(|v| v.as_str()) {
+            Some("human") => "human",
+            _ => "agent",
+        },
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SopEdge {
     pub from: String,

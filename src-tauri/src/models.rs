@@ -272,6 +272,8 @@ pub struct TemplateBundle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeCandidate {
+    /// 候选所在的 SOP（放权时必须定位到具体 SOP + 节点）。
+    pub sop_id: String,
     pub node_type: String,
     pub node_id: String,
     pub correction_count: usize,
@@ -279,6 +281,23 @@ pub struct UpgradeCandidate {
     /// 是否允许升级：资金/不可逆工具恒为 false。
     pub eligible: bool,
     pub reason: String,
+}
+
+/// owner 决策审计记录（人确认/驳回一次升级）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerDecisionRow {
+    pub id: i64,
+    pub sop_id: String,
+    pub node_id: String,
+    pub node_type: String,
+    pub from_owner: String,
+    pub to_owner: String,
+    pub decision: String,
+    pub correction_count: i64,
+    pub note: Option<String>,
+    pub decided_by: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,6 +325,8 @@ pub struct TemplateCreatePayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeApprovePayload {
+    /// 定位到具体 SOP + 节点，避免同名 node_id 跨 SOP 误操作。
+    pub sop_id: String,
     pub node_id: String,
     pub approve: bool,
 }

@@ -18,7 +18,7 @@ use crate::models::{
     SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
     CredentialSetPayload, CredentialRef, CorrectionInput, CorrectionRow, EfficiencyReport,
     TemplateBundle, TemplateCreatePayload, TemplateRow, UpgradeApprovePayload, UpgradeCandidate,
-    ToolDefPayload,
+    OwnerDecisionRow, ToolDefPayload,
 };
 
 pub(crate) fn db_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
@@ -375,38 +375,67 @@ pub fn upgrade_candidate_list(app: tauri::AppHandle) -> AppResult<Vec<UpgradeCan
     let corrections = store::list_corrections(&conn, None)?;
     let unsafe_tools: Vec<String> = store::list_tool_specs(&conn)?
         .into_iter()
-        .filter(|s| s.irreversible || s.risk == "high")
+        .filter(|s| s.irreversible || s.risk == "high" || s.requires_approval)
         .map(|s| s.id)
         .collect();
+    let sops = store::run_sop_map(&conn)?;
     Ok(experience::upgrade_candidates(
         &steps,
         &corrections,
         &unsafe_tools,
+        &sops,
         experience::UPGRADE_THRESHOLD,
     ))
 }
 
-/// 人确认/驳回升级候选。框架期只记决定到 note（实际改 owner 属 v0.5 放权，仍须人确认）。
+/// 人确认/驳回升级候选：确认时真正把 SOP 节点 config.owner 从 human 改为 agent（版本递增），
+/// 并留审计；驳回只留审计。资金/不可逆动作在候选计算与 plan 两次硬拦，永不放权。
 #[tauri::command]
 pub fn upgrade_approve(app: tauri::AppHandle, payload: UpgradeApprovePayload) -> AppResult<()> {
+    let conn = open_db(&app)?;
+    // 重新计算候选，防止绕过 UI 伪造一个不存在的候选。
+    let steps = store::all_steps(&conn)?;
+    let corrections = store::list_corrections(&conn, None)?;
+    let unsafe_tools: Vec<String> = store::list_tool_specs(&conn)?
+        .into_iter()
+        .filter(|s| s.irreversible || s.risk == "high" || s.requires_approval)
+        .map(|s| s.id)
+        .collect();
+    let sops = store::run_sop_map(&conn)?;
+    let cand = experience::upgrade_candidates(
+        &steps, &corrections, &unsafe_tools, &sops, experience::UPGRADE_THRESHOLD,
+    )
+    .into_iter()
+    .find(|c| c.sop_id == payload.sop_id && c.node_id == payload.node_id)
+    .ok_or_else(|| AppError::InvalidInput("该节点当前不是有效升级候选".into()))?;
+    if !cand.eligible {
+        return Err(AppError::RiskBlocked("资金/不可逆动作永不升级为 agent".into()));
+    }
+
     if !payload.approve {
+        store::insert_owner_decision(
+            &conn, &payload.sop_id, &payload.node_id, &cand.node_type,
+            "human", "human", "reject", cand.correction_count as i64, None,
+        )?;
         return Ok(());
     }
-    // 复核：若该节点对应工具不可逆/高风险，拒绝自动升级。
-    let conn = open_db(&app)?;
-    let steps = store::all_steps(&conn)?;
-    let node = steps
-        .iter()
-        .find(|s| s.node_id.as_deref() == Some(payload.node_id.as_str()))
-        .ok_or_else(|| AppError::NotFound(format!("节点 {}", payload.node_id)))?;
-    if let Some(ref tool) = node.tool_ref {
-        let spec = store::tool_spec(&conn, tool)?;
-        if spec.irreversible || spec.risk == "high" {
-            return Err(AppError::RiskBlocked("资金/不可逆动作永不升级为 agent".into()));
-        }
-    }
-    // 框架期：决定留痕在 corrections.note，落库由 add_correction 的人审入口完成。
+
+    // 确认放权：plan（纯校验）产出新定义 → 落库并递增版本 → 留审计。
+    let sop = store::get_sop(&conn, &payload.sop_id)?;
+    let new_def = experience::plan_owner_upgrade(&sop.definition, &payload.node_id, &unsafe_tools)?;
+    store::set_node_owner(&conn, &payload.sop_id, &new_def)?;
+    store::insert_owner_decision(
+        &conn, &payload.sop_id, &payload.node_id, &cand.node_type,
+        "human", "agent", "approve", cand.correction_count as i64, None,
+    )?;
     Ok(())
+}
+
+/// owner 决策审计列表（某 SOP 或全部）。
+#[tauri::command]
+pub fn owner_decision_list(app: tauri::AppHandle, sop_id: Option<String>) -> AppResult<Vec<OwnerDecisionRow>> {
+    let conn = open_db(&app)?;
+    store::list_owner_decisions(&conn, sop_id.as_deref())
 }
 
 #[tauri::command]
@@ -458,6 +487,13 @@ pub fn tool_remove(app: tauri::AppHandle, id: String) -> AppResult<()> {
 pub fn example_tools_install(app: tauri::AppHandle) -> AppResult<Vec<String>> {
     let conn = open_db(&app)?;
     examples::install_agentbi_examples(&conn)
+}
+
+/// 安装放权演示 SOP（human-owned agent_step，本地 Mock，无外部依赖）。
+#[tauri::command]
+pub fn delegation_demo_install(app: tauri::AppHandle) -> AppResult<String> {
+    let conn = open_db(&app)?;
+    examples::install_delegation_demo(&conn)
 }
 
 /// 安装「每日维护 agentbi.tech」示例 SOP（可改可删，作为模板导出）。

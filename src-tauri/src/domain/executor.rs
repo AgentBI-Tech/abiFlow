@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::domain::audit::redact_value;
 use crate::domain::gateway::{self, Actor, Decision, Mode};
 use crate::domain::llm::LlmProvider;
-use crate::domain::sop::{eval_condition, NodeType, SopDefinition};
+use crate::domain::sop::{effective_owner, eval_condition, NodeType, SopDefinition};
 use crate::infra::store::{self, GateState};
 use crate::models::{new_id, now_secs, AppError, AppResult};
 
@@ -70,6 +70,54 @@ fn choose_next(
     Ok(None)
 }
 
+/// v0.5：human-owned 的 agent_step/mcp_tool 在执行前先过一次 owner 确认门。
+/// 返回 Some(status) 表示本步应暂停（wait_human）或终止（failed），None 表示可继续。
+/// 资金/不可逆工具由调用方排除（它们走既有 high_risk/irreversible 门，永不放权）。
+fn owner_review_gate(
+    conn: &Connection,
+    run_id: &str,
+    step_id: &str,
+    current: &str,
+    outputs: &HashMap<String, Value>,
+    skipped: &HashSet<String>,
+) -> AppResult<Option<String>> {
+    let owner: String = conn
+        .query_row("SELECT owner FROM steps WHERE id=?1", params![step_id], |r| r.get(0))
+        .unwrap_or_else(|_| "agent".into());
+    if owner != "human" {
+        return Ok(None);
+    }
+    match store::gate_state_for_step(conn, step_id)? {
+        GateState::None => {
+            store::insert_gate(
+                conn,
+                run_id,
+                step_id,
+                "owner_review",
+                "该步骤当前由人工负责，请确认是否采纳 Agent 的产出",
+                None,
+            )?;
+            store::update_step(conn, step_id, "wait_human", None, None)?;
+            store::update_run_status(conn, run_id, "wait_human", None, None)?;
+            store::update_run_cursor(
+                conn,
+                run_id,
+                Some(current),
+                &serde_json::to_string(outputs).unwrap_or_else(|_| "{}".into()),
+                &serde_json::to_string(skipped).unwrap_or_else(|_| "[]".into()),
+            )?;
+            Ok(Some("wait_human".into()))
+        }
+        GateState::Pending => Ok(Some("wait_human".into())),
+        GateState::Rejected => {
+            store::update_step(conn, step_id, "failed", None, None)?;
+            store::update_run_status(conn, run_id, "failed", Some("fail"), Some("人工驳回该步骤产出"))?;
+            Ok(Some("failed".into()))
+        }
+        GateState::Approved => Ok(None),
+    }
+}
+
 /// 启动一条 run：固定定义快照 + 建 step 行 + 进入 running 并推进。
 pub fn start_run(
     conn: &Connection,
@@ -92,11 +140,10 @@ pub fn start_run(
     let run_id = store::insert_run(conn, sop_id, sop.version, mode, trigger_by, &sop.definition)?;
 
     // 为每个节点建一条 step 行（含 start/end，便于看板展示完整路径）。
+    // owner 由节点类型 + config.owner 决定（v0.5）：human_gate/acceptance 恒 human，
+    // agent_step/mcp_tool 可被标为 human（待人确认产出），是经验放权的升级对象。
     for (i, n) in def.nodes.iter().enumerate() {
-        let owner = match n.node_type {
-            NodeType::HumanGate | NodeType::Acceptance => "human",
-            _ => "agent",
-        };
+        let owner = effective_owner(n);
         let tool_ref = if n.node_type == NodeType::McpTool {
             n.config.get("tool").and_then(|v| v.as_str()).map(|s| s.to_string())
         } else {
@@ -217,6 +264,14 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dy
 
                 // v0.3：统一走 gateway 授权（Allow/Deny/NeedGate）；不变量 2/3 在此集中判定。
                 let spec = store::tool_spec(conn, tool)?;
+                // v0.5：human-owned 且非资金/不可逆工具 → 执行前先过 owner 确认门。
+                if !(spec.irreversible || spec.risk == "high" || spec.requires_approval) {
+                    if let Some(status) =
+                        owner_review_gate(conn, run_id, &step_id, &current, &outputs, &skipped)?
+                    {
+                        return Ok(status);
+                    }
+                }
                 let mode = Mode::parse(&run.mode)?;
                 let ctx = store::call_ctx(conn, run_id, Actor::agent(), mode, tool)?;
                 let decision = gateway::authorize(&spec, &ctx);
@@ -279,6 +334,14 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dy
             }
             NodeType::AgentStep => {
                 let step_id = store::step_id_for_node(conn, run_id, &current)?;
+                // v0.5：human-owned 的 agent_step 先过 owner 确认门（LLM 步不涉及资金/不可逆）。
+                if let Some(ref id) = step_id {
+                    if let Some(status) =
+                        owner_review_gate(conn, run_id, id, &current, &outputs, &skipped)?
+                    {
+                        return Ok(status);
+                    }
+                }
                 let goal = node
                     .config
                     .get("goal")

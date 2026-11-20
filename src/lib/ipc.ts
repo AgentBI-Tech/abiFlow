@@ -39,6 +39,7 @@ export type StepRow = {
   nodeType: string;
   owner: string;
   toolRef: string | null;
+  nodeId: string | null;
   status: string;
   inputJson: string | null;
   outputJson: string | null;
@@ -147,12 +148,27 @@ export type CorrectionRow = {
 };
 
 export type UpgradeCandidate = {
+  sopId: string;
   nodeType: string;
   nodeId: string;
   correctionCount: number;
   threshold: number;
   eligible: boolean;
   reason: string;
+};
+
+export type OwnerDecisionRow = {
+  id: number;
+  sopId: string;
+  nodeId: string;
+  nodeType: string;
+  fromOwner: string;
+  toOwner: string;
+  decision: string;
+  correctionCount: number;
+  note: string | null;
+  decidedBy: string;
+  createdAt: number;
 };
 
 export type EfficiencyReport = {
@@ -246,11 +262,17 @@ export function templateImport(bytes: number[]): Promise<string> {
 export function correctionList(stepId: string | null): Promise<CorrectionRow[]> {
   return invoke("correction_list", { stepId });
 }
+export function correctionAdd(stepId: string, originalJson: string, correctedJson: string, note: string | null): Promise<number> {
+  return invoke("correction_add", { input: { stepId, originalJson, correctedJson, note } });
+}
 export function upgradeCandidateList(): Promise<UpgradeCandidate[]> {
   return invoke("upgrade_candidate_list");
 }
-export function upgradeApprove(nodeId: string, approve: boolean): Promise<void> {
-  return invoke("upgrade_approve", { payload: { nodeId, approve } });
+export function upgradeApprove(sopId: string, nodeId: string, approve: boolean): Promise<void> {
+  return invoke("upgrade_approve", { payload: { sopId, nodeId, approve } });
+}
+export function ownerDecisionList(sopId?: string): Promise<OwnerDecisionRow[]> {
+  return invoke("owner_decision_list", { sopId: sopId ?? null });
 }
 export function reportGet(): Promise<EfficiencyReport> {
   return invoke("report_get");
@@ -276,6 +298,9 @@ export function exampleToolsInstall(): Promise<string[]> {
 }
 export function maintenanceSopInstall(): Promise<string> {
   return invoke("maintenance_sop_install");
+}
+export function delegationDemoInstall(): Promise<string> {
+  return invoke("delegation_demo_install");
 }
 export function llmStatus(): Promise<{ name: string; mock: boolean }> {
   return invoke("llm_status");

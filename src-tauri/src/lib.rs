@@ -91,11 +91,13 @@ pub fn run() {
             commands::execution::correction_list,
             commands::execution::upgrade_candidate_list,
             commands::execution::upgrade_approve,
+            commands::execution::owner_decision_list,
             commands::execution::report_get,
             commands::execution::tool_upsert,
             commands::execution::tool_remove,
             commands::execution::example_tools_install,
             commands::execution::maintenance_sop_install,
+            commands::execution::delegation_demo_install,
             commands::execution::run_as_agent,
             commands::execution::sop_parse_text,
             commands::execution::llm_status,
@@ -112,6 +114,9 @@ mod tests {
     #[test]
     fn smoke_schema_ready() {
         let conn = infra::db::open_in_memory().expect("建表应成功");
-        assert_eq!(infra::db::user_table_count(&conn).expect("统计"), 13);
+        assert_eq!(infra::db::user_table_count(&conn).expect("统计"), 14);
+        // v0.5：放权演示 SOP 可安装，n1 为 human-owned（可放权对象）。
+        let id = domain::examples::install_delegation_demo(&conn).expect("安装演示 SOP");
+        assert_eq!(id, "sop-delegation-demo");
     }
 }

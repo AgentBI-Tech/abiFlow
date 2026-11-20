@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -1088,4 +1088,113 @@ pub fn remove_tool(conn: &Connection, id: &str) -> AppResult<()> {
     conn.execute("DELETE FROM tools WHERE id=?1", params![id])
         .map_err(|e| AppError::Db(e.to_string()))?;
     Ok(())
+}
+
+// ---- v0.5 实际放权 ----
+
+/// run_id → sop_id 映射，供 upgrade_candidates 给候选标注所属 SOP。
+pub fn run_sop_map(conn: &Connection) -> AppResult<HashMap<String, String>> {
+    let mut stmt = conn
+        .prepare("SELECT id, sop_id FROM runs")
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (id, sop) = row.map_err(|e| AppError::Db(e.to_string()))?;
+        map.insert(id, sop);
+    }
+    Ok(map)
+}
+
+/// 落库放权后的 SOP 定义（由 domain::plan_owner_upgrade 产出），版本递增。返回新版本号。
+pub fn set_node_owner(
+    conn: &Connection,
+    sop_id: &str,
+    definition_json: &str,
+) -> AppResult<i32> {
+    let current: i32 = conn
+        .query_row("SELECT version FROM sops WHERE id=?1", params![sop_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| AppError::Db(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound(format!("SOP {}", sop_id)))?;
+    let new_version = current + 1;
+    conn.execute(
+        "UPDATE sops SET version=?2, definition=?3, updated_at=?4 WHERE id=?1",
+        params![sop_id, new_version, definition_json, now_secs()],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(new_version)
+}
+
+/// 记录一次 owner 决策审计（approve/reject 都留痕）。
+#[allow(clippy::too_many_arguments)]
+pub fn insert_owner_decision(
+    conn: &Connection,
+    sop_id: &str,
+    node_id: &str,
+    node_type: &str,
+    from_owner: &str,
+    to_owner: &str,
+    decision: &str,
+    correction_count: i64,
+    note: Option<&str>,
+) -> AppResult<i64> {
+    conn.execute(
+        "INSERT INTO owner_decisions(sop_id,node_id,node_type,from_owner,to_owner,decision,correction_count,note,decided_by,created_at) \
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'human',?9)",
+        params![
+            sop_id, node_id, node_type, from_owner, to_owner, decision,
+            correction_count, note, now_secs()
+        ],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// 列出 owner 决策审计；sop_id 为 Some 时按 SOP 过滤。
+pub fn list_owner_decisions(
+    conn: &Connection,
+    sop_id: Option<&str>,
+) -> AppResult<Vec<crate::models::OwnerDecisionRow>> {
+    if let Some(sid) = sop_id {
+        let mut stmt = conn.prepare(
+            "SELECT id,sop_id,node_id,node_type,from_owner,to_owner,decision,correction_count,note,decided_by,created_at \
+             FROM owner_decisions WHERE sop_id=?1 ORDER BY created_at DESC",
+        )
+        .map_err(|e| AppError::Db(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![sid], map_owner_decision)
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Db(e.to_string()))
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT id,sop_id,node_id,node_type,from_owner,to_owner,decision,correction_count,note,decided_by,created_at \
+             FROM owner_decisions ORDER BY created_at DESC",
+        )
+        .map_err(|e| AppError::Db(e.to_string()))?;
+        let rows = stmt
+            .query_map([], map_owner_decision)
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Db(e.to_string()))
+    }
+}
+
+fn map_owner_decision(r: &rusqlite::Row) -> Result<crate::models::OwnerDecisionRow, rusqlite::Error> {
+    Ok(crate::models::OwnerDecisionRow {
+        id: r.get(0)?,
+        sop_id: r.get(1)?,
+        node_id: r.get(2)?,
+        node_type: r.get(3)?,
+        from_owner: r.get(4)?,
+        to_owner: r.get(5)?,
+        decision: r.get(6)?,
+        correction_count: r.get(7)?,
+        note: r.get(8)?,
+        decided_by: r.get(9)?,
+        created_at: r.get(10)?,
+    })
 }

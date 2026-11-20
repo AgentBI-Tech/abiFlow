@@ -4,7 +4,8 @@ use crate::models::{AppError, AppResult};
 
 const MIGRATION_V1: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_V3: &str = include_str!("../../migrations/003_experience.sql");
-const SCHEMA_VERSION: i64 = 3;
+const MIGRATION_V4: &str = include_str!("../../migrations/004_owner_delegation.sql");
+const SCHEMA_VERSION: i64 = 4;
 
 /// v2 要新增的列（table, column, ALTER 语句）。逐列按存在性执行，保证幂等。
 const V2_COLUMNS: &[(&str, &str, &str)] = &[
@@ -58,6 +59,14 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         [],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    // v4: owner_decisions 表（全 IF NOT EXISTS，可直接重放）。
+    conn.execute_batch(MIGRATION_V4)
+        .map_err(|e| AppError::Db(format!("迁移 v4 失败：{}", e)))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (4, CAST(strftime('%s','now') AS INTEGER))",
+        [],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
     let v: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
         .map_err(|e| AppError::Db(e.to_string()))?;
@@ -100,8 +109,8 @@ mod tests {
     fn migration_creates_all_tables() {
         let conn = open_in_memory().expect("内存库迁移应成功");
         let n = user_table_count(&conn).expect("统计应成功");
-        // 12 张业务表（含 schema_meta）
-        assert_eq!(n, 13, "应建 13 张表，实得 {}", n);
+        // 14 张业务表（含 schema_meta）
+        assert_eq!(n, 14, "应建 14 张表，实得 {}", n);
     }
 
     #[test]
@@ -115,8 +124,9 @@ mod tests {
             }
         }
         conn.execute_batch(MIGRATION_V3).expect("重放迁移 v3 应成功");
+        conn.execute_batch(MIGRATION_V4).expect("重放迁移 v4 应成功");
         let n = user_table_count(&conn).expect("统计应成功");
-        assert_eq!(n, 13);
+        assert_eq!(n, 14);
     }
 
     #[test]
@@ -144,7 +154,24 @@ mod tests {
         assert!(!nested.parent().unwrap().exists(), "父目录起初不应存在");
         let conn = open(&nested).expect("open 应创建父目录并建表");
         assert!(nested.exists(), "db 文件应生成");
-        assert_eq!(user_table_count(&conn).expect("统计"), 13);
+        assert_eq!(user_table_count(&conn).expect("统计"), 14);
+    }
+
+    /// owner_decisions 表存在且字段齐全（v0.5 实际放权审计）。
+    #[test]
+    fn owner_decisions_table_ready() {
+        let conn = open_in_memory().expect("迁移");
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(owner_decisions)")
+            .expect("pragma");
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .expect("query")
+            .map(|c| c.expect("col"))
+            .collect();
+        for need in ["sop_id", "node_id", "from_owner", "to_owner", "decision", "correction_count"] {
+            assert!(cols.iter().any(|c| c == need), "缺列 {}", need);
+        }
     }
 
     #[test]
