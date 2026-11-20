@@ -44,9 +44,9 @@ button.close { margin-left: auto; }
 .steps > li { margin: 4px 0; }
 .steps pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px; font-size: 11px; overflow-x: auto; }
 
-/* SOP 画布（v0.1 空画布，只读） */
-.sop-canvas-wrap { height: 460px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; background: #f8fafc; }
-.sop-node { width: 196px; min-height: 60px; background: #fff; border: 2px solid #94a3b8; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-.sop-node-label { color: #fff; font-size: 12px; font-weight: 600; padding: 3px 8px; }
-.sop-node-id { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600; padding: 5px 8px 0; color: #1e293b; }
-.sop-node-summary { font-size: 11px; color: #64748b; padding: 2px 8px 6px; word-break: break-all; line-height: 1.35; }
+/* SOP 画布（v0.1 空画布，只读；节点框/文字/连线全在单一 SVG，绝无层错位） */
+.sop-canvas-tools { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 12px; flex-wrap: wrap; }
+.sop-canvas-tools input[type=range] { vertical-align: middle; }
+.sop-canvas-viewport { position: relative; height: 460px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; background: #f8fafc; background-image: radial-gradient(#e2e8f0 1px, transparent 1px); background-size: 20px 20px; cursor: grab; user-select: none; }
+.sop-canvas-viewport:active { cursor: grabbing; }
+.sop-canvas-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
