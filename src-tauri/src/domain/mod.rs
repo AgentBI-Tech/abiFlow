@@ -8,5 +8,6 @@ pub mod experience;
 pub mod gateway;
 pub mod keystore;
 pub mod llm;
+pub mod reviewer;
 pub mod scheduler;
 pub mod sop;

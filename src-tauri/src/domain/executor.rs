@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use crate::domain::audit::redact_value;
 use crate::domain::gateway::{self, Actor, Decision, Mode};
 use crate::domain::llm::LlmProvider;
+use crate::domain::reviewer;
 use crate::domain::sop::{effective_owner, eval_condition, NodeType, SopDefinition};
 use crate::infra::store::{self, GateState};
 use crate::models::{new_id, now_secs, AppError, AppResult};
@@ -434,9 +435,14 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dy
                     .cloned()
                     .unwrap_or_default();
                 for c in &criteria {
-                    let expr = c.as_str().unwrap_or("");
-                    let passed = eval_condition(expr, &outputs).unwrap_or(false);
-                    store::insert_acceptance(conn, run_id, expr, passed, "rule", None)?;
+                    // 评审者核对：规则能求值走 rule，模糊标准（或 mode=llm）走 LLM。
+                    let verdict = reviewer::review(c, &outputs, llm)?;
+                    let expr = c.as_str().map(|s| s.to_string())
+                        .or_else(|| c.get("criterion").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                        .unwrap_or_else(|| c.to_string());
+                    store::insert_acceptance(
+                        conn, run_id, &expr, verdict.passed, verdict.checked_by, Some(&verdict.note),
+                    )?;
                 }
                 // 不变量 4：所有 acceptance 必须 passed，否则终态 partial。
                 let step_id = store::step_id_for_node(conn, run_id, &current)?;
@@ -670,6 +676,16 @@ mod agent_step_llm_tests {
         }
     }
 
+    /// 评审用：总是返回通过的 JSON 判定（非 mock）。
+    struct PassVerdictProvider;
+    impl LlmProvider for PassVerdictProvider {
+        fn name(&self) -> &str { "verdict-pass" }
+        fn is_mock(&self) -> bool { false }
+        fn generate(&self, _prompt: &str) -> AppResult<String> {
+            Ok(r#"{"passed":true,"note":"评审核实通过"}"#.into())
+        }
+    }
+
     #[test]
     fn agent_step_invokes_llm_and_records_provider() {
         let c = db::open_in_memory().unwrap();
@@ -705,6 +721,39 @@ mod agent_step_llm_tests {
             ).unwrap_or_default(),
             "spy-mock"
         );
+    }
+
+    #[test]
+    fn llm_mode_acceptance_uses_reviewer() {
+        let c = db::open_in_memory().unwrap();
+        demo_install(&c).unwrap();
+        // 建一条 SOP：start → agent_step → acceptance(mode=llm) → end。
+        let def = serde_json::json!({
+            "version": 1,
+            "nodes": [
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"agent_step","config":{"goal":"核对数据"}},
+                {"id":"n2","type":"acceptance","config":{"criteria":[
+                    {"criterion":"数据与后台一致","mode":"llm"}
+                ]}},
+                {"id":"n3","type":"end","config":{}}
+            ],
+            "edges": [
+                {"from":"n0","to":"n1"},{"from":"n1","to":"n2"},{"from":"n2","to":"n3"}
+            ]
+        });
+        let sop_id = "sop-review-llm";
+        c.execute(
+            "INSERT INTO sops(id,name,version,trigger_json,risk,owner_policy,enabled,created_at,updated_at,definition) \
+             VALUES(?1,'评审测试',1,'{}','low','agent',1,0,0,?2)",
+            rusqlite::params![sop_id, def.to_string()],
+        ).unwrap();
+        let run_id = start_run(&c, sop_id, "build", "manual", &serde_json::json!({}), &DemoTools, &PassVerdictProvider).unwrap();
+        assert_eq!(store::get_run(&c, &run_id).unwrap().status, "done");
+        let acc = store::list_acceptance(&c, &run_id).unwrap();
+        assert_eq!(acc.len(), 1);
+        assert!(acc[0].passed, "LLM 评审通过应判 pass");
+        assert_eq!(acc[0].checked_by, "llm", "LLM 模式验收须记 checked_by=llm");
     }
 }
 
