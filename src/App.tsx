@@ -38,6 +38,7 @@ export default function App() {
   const [err, setErr] = useState("");
   const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm">("board");
   const [selCanvasSop, setSelCanvasSop] = useState("");
+  const [cronDraft, setCronDraft] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -164,11 +165,16 @@ export default function App() {
                   </div>
                   <div className="row actions sched">
                     <span className={`pill ${sched ? "on" : "off"}`}>{sched ? "自动运行中" : "未设自动"}</span>
+                    {sched?.cronExpr ? (
+                      <span className="pill on" data-cron-expr={sched.cronExpr}>cron {sched.cronExpr}</span>
+                    ) : null}
+                  </div>
+                  <div className="row actions sched">
                     <label>间隔
                       <select
-                        value={sched ? String(sched.intervalSecs) : "0"}
+                        value={sched && !sched.cronExpr ? String(sched.intervalSecs) : "0"}
                         disabled={!!busy}
-                        onChange={(e) => act("设置间隔", () => scheduleSet(s.id, true, Number(e.target.value)))}
+                        onChange={(e) => act("设置间隔", () => scheduleSet(s.id, true, Number(e.target.value), null))}
                       >
                         <option value="0" disabled>选择间隔</option>
                         <option value="600">10 分钟</option>
@@ -177,15 +183,26 @@ export default function App() {
                         <option value="86400">1 天</option>
                       </select>
                     </label>
+                    <label>cron（分 时 日 月 周，如 0 9 * * *）
+                      <input
+                        className="cron-input"
+                        placeholder="0 9 * * *"
+                        value={cronDraft[s.id] ?? sched?.cronExpr ?? ""}
+                        disabled={!!busy}
+                        onChange={(e) => setCronDraft((d) => ({ ...d, [s.id]: e.target.value }))}
+                      />
+                    </label>
+                    <button
+                      disabled={!!busy || !(cronDraft[s.id] ?? sched?.cronExpr ?? "").trim()}
+                      onClick={() => act("设置 cron", () => scheduleSet(s.id, true, 0, (cronDraft[s.id] ?? "").trim()))}
+                    >用 cron</button>
                     {sched ? (
-                      <>
-                        <span className="ver">下次 {fmtTime(sched.nextRunAt)}</span>
-                        <button disabled={!!busy} onClick={() => act("停调度", () => scheduleSet(s.id, false, 0))}>停自动</button>
-                      </>
-                    ) : (
-                      <button disabled={!!busy} onClick={() => act("开调度", () => scheduleSet(s.id, true, 3600))}>开自动</button>
-                    )}
+                      <button disabled={!!busy} onClick={() => act("停调度", () => scheduleSet(s.id, false, 0, null))}>停自动</button>
+                    ) : null}
                   </div>
+                  {sched ? (
+                    <div className="row sub-row"><span>下次 {fmtTime(sched.nextRunAt)} · {sched.cronExpr ? "按本地时区对齐" : "固定间隔"}</span></div>
+                  ) : null}
                 </li>
                 );
               })}

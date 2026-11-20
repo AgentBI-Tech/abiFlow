@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::{
-    now_secs, new_id, AcceptanceRow, AppError, AppResult, DashboardData, GateRow, RunDetail,
+    now_secs, new_id, AcceptanceRow, AppError, AppResult, DashboardData, DueSchedule, GateRow, RunDetail,
     RunRow, ScheduleInfo, SopRow, SopUpsertPayload, StepRow,
 };
 
@@ -564,10 +564,27 @@ fn list_gates_for_run(conn: &Connection, run_id: &str) -> AppResult<Vec<GateRow>
 
 pub fn upsert_schedule(conn: &Connection, sop_id: &str, interval_secs: i64) -> AppResult<()> {
     conn.execute(
-        "INSERT INTO schedules(sop_id,next_run_at,last_run_at,status,updated_at,interval_secs) \
-         VALUES(?1,?2,NULL,'idle',?2,?3) \
-         ON CONFLICT(sop_id) DO UPDATE SET next_run_at=?2, interval_secs=?3, updated_at=?2, status='idle'",
+        "INSERT INTO schedules(sop_id,next_run_at,last_run_at,status,updated_at,interval_secs,cron_expr) \
+         VALUES(?1,?2,NULL,'idle',?2,?3,NULL) \
+         ON CONFLICT(sop_id) DO UPDATE SET next_run_at=?2, interval_secs=?3, cron_expr=NULL, updated_at=?2, status='idle'",
         params![sop_id, now_secs() + interval_secs, interval_secs],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+/// cron 模式调度：用表达式算出的首次触发时间落库，cron_expr 非 NULL。
+pub fn upsert_cron_schedule(
+    conn: &Connection,
+    sop_id: &str,
+    cron_expr: &str,
+    next_run_at: i64,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO schedules(sop_id,next_run_at,last_run_at,status,updated_at,interval_secs,cron_expr) \
+         VALUES(?1,?2,NULL,'idle',?2,0,?3) \
+         ON CONFLICT(sop_id) DO UPDATE SET next_run_at=?2, cron_expr=?3, interval_secs=0, updated_at=?2, status='idle'",
+        params![sop_id, next_run_at, cron_expr],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
     Ok(())
@@ -579,17 +596,23 @@ pub fn remove_schedule(conn: &Connection, sop_id: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub fn list_due_schedules(conn: &Connection, now: i64) -> AppResult<Vec<(String, i64)>> {
-    // 返回 (sop_id, interval_secs)；next_run_at <= now 且未在跑。
+pub fn list_due_schedules(conn: &Connection, now: i64) -> AppResult<Vec<DueSchedule>> {
+    // 返回到期项（含 cron_expr）；next_run_at <= now 且未在跑。
     let mut stmt = conn
         .prepare(
-            "SELECT sop_id, interval_secs FROM schedules \
+            "SELECT sop_id, interval_secs, cron_expr FROM schedules \
              WHERE next_run_at IS NOT NULL AND next_run_at<=?1 AND status!='running' \
              ORDER BY next_run_at",
         )
         .map_err(|e| AppError::Db(e.to_string()))?;
     let rows = stmt
-        .query_map(params![now], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .query_map(params![now], |r| {
+            Ok(DueSchedule {
+                sop_id: r.get(0)?,
+                interval_secs: r.get(1)?,
+                cron_expr: r.get(2)?,
+            })
+        })
         .map_err(|e| AppError::Db(e.to_string()))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::Db(e.to_string()))
@@ -614,7 +637,7 @@ pub fn dashboard(conn: &Connection) -> AppResult<DashboardData> {
     let schedules = {
         let mut stmt = conn
             .prepare(
-                "SELECT sc.sop_id, s.name, sc.next_run_at, sc.last_run_at, sc.status, sc.interval_secs \
+                "SELECT sc.sop_id, s.name, sc.next_run_at, sc.last_run_at, sc.status, sc.interval_secs, sc.cron_expr \
                  FROM schedules sc JOIN sops s ON s.id=sc.sop_id ORDER BY sc.next_run_at",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
@@ -627,6 +650,7 @@ pub fn dashboard(conn: &Connection) -> AppResult<DashboardData> {
                     last_run_at: r.get(3)?,
                     status: r.get(4)?,
                     interval_secs: r.get(5)?,
+                    cron_expr: r.get(6)?,
                 })
             })
             .map_err(|e| AppError::Db(e.to_string()))?;

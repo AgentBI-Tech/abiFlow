@@ -34,6 +34,7 @@ button.close { margin-left: auto; }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .row.actions { margin-top: 6px; }
 .row.sched { margin-top: 8px; padding-top: 8px; border-top: 1px dotted #e2e8f0; align-items: flex-end; }
+.cron-input { font-family: ui-monospace, monospace; width: 150px; }
 .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #f1f5f9; color: #475569; }
 .pill.on { background: #dcfce7; color: #166534; }
 .pill.off { background: #fee2e2; color: #991b1b; }

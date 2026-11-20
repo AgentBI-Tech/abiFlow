@@ -13,7 +13,7 @@ use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
 use crate::infra::{db, store, template_zip, tool_engine::ToolEngine};
 use crate::models::{
-    AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunControlPayload,
+    now_secs, AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunControlPayload,
     RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
     SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
     CredentialSetPayload, CredentialRef, CorrectionInput, CorrectionRow, EfficiencyReport,
@@ -65,11 +65,20 @@ pub fn sop_set_enabled(app: tauri::AppHandle, id: String, enabled: bool) -> AppR
 #[tauri::command]
 pub fn schedule_set(app: tauri::AppHandle, payload: ScheduleSetPayload) -> AppResult<()> {
     let conn = open_db(&app)?;
-    if payload.enabled {
+    if !payload.enabled {
+        return store::remove_schedule(&conn, &payload.sop_id);
+    }
+    if let Some(expr) = payload.cron_expr.as_deref() {
+        if expr.trim().is_empty() {
+            return Err(AppError::InvalidInput("cron 表达式不得为空".into()));
+        }
+        // 先校验表达式合法性，再算首次触发时间，避免非法表达式落库。
+        let cron = crate::domain::cron::CronExpr::parse(expr)?;
+        let next = cron.next_after(now_secs())?;
+        store::upsert_cron_schedule(&conn, &payload.sop_id, cron.raw.as_str(), next)
+    } else {
         let secs = payload.interval_secs.unwrap_or(3600).max(1);
         store::upsert_schedule(&conn, &payload.sop_id, secs)
-    } else {
-        store::remove_schedule(&conn, &payload.sop_id)
     }
 }
 

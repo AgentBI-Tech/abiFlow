@@ -109,6 +109,8 @@ pub struct ScheduleInfo {
     pub last_run_at: Option<i64>,
     pub status: String,
     pub interval_secs: i64,
+    /// 标准 5 段 cron 表达式；None = 旧的 interval 间隔模式。
+    pub cron_expr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,12 +161,22 @@ pub struct GateDecidePayload {
     pub payload: Option<Value>,
 }
 
+/// 到期调度项：cron 模式 cron_expr 为 Some（按表达式算下次），否则用 interval_secs。
+#[derive(Debug, Clone)]
+pub struct DueSchedule {
+    pub sop_id: String,
+    pub interval_secs: i64,
+    pub cron_expr: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleSetPayload {
     pub sop_id: String,
     pub enabled: bool,
     pub interval_secs: Option<i64>,
+    /// 设了 cron 表达式则走 cron 模式（与 interval_secs 二选一，cron 优先）。
+    pub cron_expr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

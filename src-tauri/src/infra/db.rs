@@ -5,7 +5,7 @@ use crate::models::{AppError, AppResult};
 const MIGRATION_V1: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_V3: &str = include_str!("../../migrations/003_experience.sql");
 const MIGRATION_V4: &str = include_str!("../../migrations/004_owner_delegation.sql");
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// v2 要新增的列（table, column, ALTER 语句）。逐列按存在性执行，保证幂等。
 const V2_COLUMNS: &[(&str, &str, &str)] = &[
@@ -64,6 +64,20 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         .map_err(|e| AppError::Db(format!("迁移 v4 失败：{}", e)))?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (4, CAST(strftime('%s','now') AS INTEGER))",
+        [],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    // v5: schedules.cron_expr（NULL = 旧的 interval 模式，向后兼容；非 NULL = cron 模式）。
+    // SQLite ALTER 无 IF NOT EXISTS，按列存在性守卫保证幂等重放。
+    if !column_exists(conn, "schedules", "cron_expr")? {
+        conn.execute(
+            "ALTER TABLE schedules ADD COLUMN cron_expr TEXT",
+            [],
+        )
+        .map_err(|e| AppError::Db(format!("迁移 v5 失败（cron_expr）：{}", e)))?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (5, CAST(strftime('%s','now') AS INTEGER))",
         [],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
@@ -155,6 +169,17 @@ mod tests {
         let conn = open(&nested).expect("open 应创建父目录并建表");
         assert!(nested.exists(), "db 文件应生成");
         assert_eq!(user_table_count(&conn).expect("统计"), 14);
+    }
+
+    /// v5：schedules.cron_expr 列存在（NULL = interval 模式）。
+    #[test]
+    fn schedules_cron_expr_column_ready() {
+        let conn = open_in_memory().expect("迁移");
+        assert!(column_exists(&conn, "schedules", "cron_expr").expect("查列"), "缺 cron_expr 列");
+        let v: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
+            .expect("查版本");
+        assert_eq!(v, 5, "schema 版本应为 5");
     }
 
     /// owner_decisions 表存在且字段齐全（v0.5 实际放权审计）。

@@ -84,6 +84,7 @@ export type ScheduleInfo = {
   lastRunAt: number | null;
   status: string;
   intervalSecs: number;
+  cronExpr: string | null;
 };
 
 export type DashboardData = {
@@ -205,8 +206,8 @@ export function gateDecide(gateId: string, decision: string, note?: string): Pro
 export function schedulerTick(): Promise<SchedulerTickResult> {
   return invoke("scheduler_tick");
 }
-export function scheduleSet(sopId: string, enabled: boolean, intervalSecs: number): Promise<void> {
-  return invoke("schedule_set", { payload: { sopId, enabled, intervalSecs } });
+export function scheduleSet(sopId: string, enabled: boolean, intervalSecs: number, cronExpr?: string | null): Promise<void> {
+  return invoke("schedule_set", { payload: { sopId, enabled, intervalSecs, cronExpr: cronExpr ?? null } });
 }
 export function runAsAgent(sopId: string): Promise<{ runId: string }> {
   return invoke("run_as_agent", { sopId });
