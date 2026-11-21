@@ -192,6 +192,10 @@ pub struct RunStartPayload {
 pub struct RunControlPayload {
     pub run_id: String,
     pub action: String,
+    /// change_path 的目标节点 id；其它动作忽略。
+    pub value: Option<String>,
+    /// 人工干预留痕说明。
+    pub note: Option<String>,
 }
 
 /// 人工仲裁（验收打回两轮后 review 状态）：resume 放行重跑 / fail 判失败。

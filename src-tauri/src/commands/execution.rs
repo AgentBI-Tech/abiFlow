@@ -132,10 +132,17 @@ pub fn run_list(
 #[tauri::command]
 pub fn run_control(
     app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
+    llmst: tauri::State<'_, AppLlm>,
     payload: RunControlPayload,
 ) -> AppResult<String> {
     let conn = open_db(&app)?;
-    executor::control(&conn, &payload.run_id, &payload.action)
+    let engine = ToolEngine::new(ks.0.clone());
+    executor::control(
+        &conn, &payload.run_id, &payload.action,
+        payload.value.as_deref(), payload.note.as_deref(),
+        &engine, llmst.0.as_ref(),
+    )
 }
 
 /// 第 1 轮打回后重试（清空本轮验收留痕、游标回起点重跑；reject_count 不重置）。

@@ -227,8 +227,9 @@ export function runStart(sopId: string, input?: unknown): Promise<{ runId: strin
 export function runList(sopId?: string, status?: string, limit?: number): Promise<RunRow[]> {
   return invoke("run_list", { sopId: sopId ?? null, status: status ?? null, limit: limit ?? 30 });
 }
-export function runControl(runId: string, action: string): Promise<string> {
-  return invoke("run_control", { payload: { runId, action } });
+/** 人工干预：pause/resume/takeover/cancel/change_path。changePath 时 value=目标节点 id。 */
+export function runControl(runId: string, action: string, value?: string, note?: string): Promise<string> {
+  return invoke("run_control", { payload: { runId, action, value: value ?? null, note: note ?? null } });
 }
 /** 第 1 轮打回后重试。 */
 export function runRetry(runId: string): Promise<string> {

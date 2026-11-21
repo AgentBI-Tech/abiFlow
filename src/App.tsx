@@ -11,6 +11,7 @@ import {
   gateDecide,
   runGet,
   runArbitrate,
+  runControl,
   runRetry,
   runStart,
   runAsAgent,
@@ -37,6 +38,7 @@ export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [arbNote, setArbNote] = useState("");
+  const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm">("board");
@@ -358,6 +360,26 @@ export default function App() {
                         </button>
                       </>
                     )}
+                  </div>
+                </div>
+              )}
+              {!["done", "failed", "cancelled"].includes(detail.run.status) && (
+                <div className="stack" data-testid="control-box">
+                  <h3>人工干预（保留上下文）</h3>
+                  <p className="sub-row">暂停/恢复只放行「暂停门」，不绕过真实人工门；接管把当前步交给人工；改路径只改本次 run 的剩余节点。</p>
+                  <label className="stack">
+                    改路径目标节点 id（当前步骤见上方步骤列表）
+                    <input value={pathTarget} onChange={(e) => setPathTarget(e.target.value)} placeholder="如 n3" />
+                  </label>
+                  <div className="row actions">
+                    {["running", "pending"].includes(detail.run.status) && (
+                      <button disabled={!!busy} onClick={() => act("暂停", async () => { await runControl(detail.run.id, "pause"); setDetail(await runGet(detail.run.id)); })}>暂停</button>
+                    )}
+                    {detail.run.status === "wait_human" && (
+                      <button disabled={!!busy} onClick={() => act("恢复", async () => { await runControl(detail.run.id, "resume", undefined, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>恢复</button>
+                    )}
+                    <button disabled={!!busy} onClick={() => act("接管", async () => { await runControl(detail.run.id, "takeover", undefined, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>接管当前步</button>
+                    <button disabled={!!busy} onClick={() => act("改路径", async () => { await runControl(detail.run.id, "change_path", pathTarget, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>改路径</button>
                   </div>
                 </div>
               )}

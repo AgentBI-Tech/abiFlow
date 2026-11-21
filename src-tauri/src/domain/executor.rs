@@ -612,20 +612,117 @@ pub fn arbitrate(
     }
 }
 
-/// 暂停/恢复/取消/接管。v0.2 只真正实现 cancel 与 takeover 改状态，其余返回提示。
-pub fn control(conn: &Connection, run_id: &str, action: &str) -> AppResult<String> {
+/// 人工干预：暂停 / 恢复 / 取消 / 接管 / 改路径（§3 v1 第 2 条、§5.2）。
+///
+/// 上下文保留：四种干预都不重置游标与 outputs（不从头重读）。
+/// 安全底线：resume 只放行「仅含 pause 门」的 run，绝不绕过真实人工门
+/// （高风险/审批/owner_review/熔断/打回等）；资金与不可逆动作仍由各自门管辖。
+///
+/// - pause：running/pending → 插 reason=pause 门，run→wait_human（status CHECK 无 paused，复用 wait_human）。
+/// - resume：仅当所有 pending 门都是 pause → 批准它们 + 续跑；否则拒绝（防绕过真实门）。
+/// - takeover：把当前节点 step 的 owner 改 human + log(actor=human) + 插 takeover 门等人操作/裁决。
+/// - change_path：value=目标节点 id，须在定义快照中存在；改游标后从新节点续跑。
+pub fn control(
+    conn: &Connection,
+    run_id: &str,
+    action: &str,
+    value: Option<&str>,
+    note: Option<&str>,
+    tools: &dyn ToolRunner,
+    llm: &dyn LlmProvider,
+) -> AppResult<String> {
     let run = store::get_run(conn, run_id)?;
     match action {
         "cancel" => {
             if matches!(run.status.as_str(), "done" | "failed" | "cancelled") {
                 return Err(AppError::InvalidInput("终态 run 不可取消".into()));
             }
-            store::update_run_status(conn, run_id, "cancelled", None, Some("用户取消"))?;
+            store::update_run_status(conn, run_id, "cancelled", None, Some(note.unwrap_or("用户取消")))?;
             Ok("cancelled".into())
         }
-        "pause" | "resume" | "change_path" => Err(AppError::InvalidInput(format!(
-            "{} 将在 v0.3+ 实现", action
-        ))),
+        "pause" => {
+            if !matches!(run.status.as_str(), "running" | "pending") {
+                return Err(AppError::InvalidInput(format!("仅运行中 run 可暂停，当前 {}", run.status)));
+            }
+            let pending = store::list_gates(conn, true)?
+                .into_iter().filter(|g| g.run_id == run_id).collect::<Vec<_>>();
+            if !pending.is_empty() {
+                // 已有真实人工门待裁决：暂停无意义，直接停在 wait_human，不新增门掩盖它。
+                return Ok("wait_human".into());
+            }
+            if let Some(node) = run.current_node.as_deref() {
+                if let Some(sid) = store::step_id_for_node(conn, run_id, node)? {
+                    store::insert_gate(conn, run_id, &sid, "pause", "流程已暂停，批准后从当前步骤继续", None)?;
+                    store::update_step(conn, &sid, "wait_human", None, None)?;
+                    if let Some(n) = note { store::append_run_note(conn, run_id, n)?; }
+                }
+            }
+            store::update_run_status(conn, run_id, "wait_human", None, Some("已暂停（上下文保留）"))?;
+            Ok("wait_human".into())
+        }
+        "resume" => {
+            if run.status != "wait_human" {
+                return Ok(run.status); // 非等待态无需恢复
+            }
+            let pending = store::list_gates(conn, true)?
+                .into_iter().filter(|g| g.run_id == run_id).collect::<Vec<_>>();
+            if pending.is_empty() {
+                return Err(AppError::InvalidInput("无待裁决门，无需恢复".into()));
+            }
+            // 安全底线：只要有一个非 pause 门，就不许一键恢复。
+            if pending.iter().any(|g| g.reason != "pause") {
+                return Err(AppError::InvalidInput("存在真实人工门待裁决，请在人工待办中处理，不可用恢复绕过".into()));
+            }
+            for g in &pending {
+                store::decide_gate(conn, &g.id, "approve", note)?;
+            }
+            if let Some(n) = note { store::append_run_note(conn, run_id, n)?; }
+            resume_after_gate(conn, run_id, tools, llm)
+        }
+        "takeover" => {
+            if matches!(run.status.as_str(), "done" | "failed" | "cancelled") {
+                return Err(AppError::InvalidInput("终态 run 不可接管".into()));
+            }
+            if let Some(node) = run.current_node.as_deref() {
+                if let Some(sid) = store::step_id_for_node(conn, run_id, node)? {
+                    store::set_step_owner(conn, &sid, "human")?;
+                    // verdict 受 CHECK 限制（ok/fail/needs_human）；细节写 output_redact。
+                    store::insert_log(conn, &sid, "human", Some("takeover"), None, Some("人工接管当前步骤"), Some("needs_human"))?;
+                    store::insert_gate(conn, run_id, &sid, "takeover", "已由人工接管，请处理后再批准继续", None)?;
+                }
+            }
+            if let Some(n) = note { store::append_run_note(conn, run_id, n)?; }
+            if run.status != "wait_human" {
+                store::update_run_status(conn, run_id, "wait_human", None, Some("人工接管（上下文保留）"))?;
+            }
+            Ok("wait_human".into())
+        }
+        "change_path" => {
+            let target = value.ok_or_else(|| AppError::InvalidInput("改路径需提供目标节点 id".into()))?;
+            let def: SopDefinition = serde_json::from_str(
+                run.definition_snapshot.as_deref()
+                    .ok_or_else(|| AppError::InvalidInput("run 缺定义快照".into()))?,
+            )
+            .map_err(|e| AppError::InvalidInput(format!("定义快照非法：{}", e)))?;
+            if def.node(target).is_none() {
+                return Err(AppError::InvalidInput(format!("目标节点不存在于当前 SOP：{}", target)));
+            }
+            // 改的是本次 run 的剩余路径（游标），不改 SOP 定义；outputs/skipped 保留。
+            store::update_run_cursor(conn, run_id, Some(target), &run.outputs_json, &run.branch_skipped)?;
+            let detail = note.unwrap_or("人工改路径");
+            store::append_run_note(conn, run_id, &format!("{}：→ {}", detail, target))?;
+            if let Some(node) = run.current_node.as_deref() {
+                if let Some(sid) = store::step_id_for_node(conn, run_id, node)? {
+                    let detail_str = format!("{} → {}", detail, target);
+                    store::insert_log(conn, &sid, "human", Some("change_path"), None, Some(&detail_str), Some("ok"))?;
+                }
+            }
+            if run.status != "running" {
+                // 从等待态改路径后直接续跑（资金/不可逆门仍由 advance 内原逻辑管辖）。
+                store::update_run_status(conn, run_id, "running", None, None)?;
+            }
+            advance(conn, run_id, tools, llm)
+        }
         _ => Err(AppError::InvalidInput(format!("未知控制动作：{}", action))),
     }
 }
@@ -778,9 +875,9 @@ mod tests {
     fn cancel_terminal_guard() {
         let c = setup();
         let run_id = start_run(&c, "sop-demo-daily-anomaly", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
-        let s = control(&c, &run_id, "cancel").unwrap();
+        let s = control(&c, &run_id, "cancel", None, None, &DemoTools, &MockProvider).unwrap();
         assert_eq!(s, "cancelled");
-        assert!(control(&c, &run_id, "cancel").is_err(), "终态不可再取消");
+        assert!(control(&c, &run_id, "cancel", None, None, &DemoTools, &MockProvider).is_err(), "终态不可再取消");
     }
 }
 
@@ -1148,5 +1245,107 @@ mod sop_parse_tests {
         store::decide_gate(&c, &gate.id, "approve", Some("人工确认采纳")).unwrap();
         let s = resume_after_gate(&c, &run_id, &DemoTools, &llm).unwrap();
         assert_eq!(s, "wait_human", "批准后重跑仍低置信度，再次停门待裁决");
+    }
+
+    // ---- 人工干预：暂停 / 恢复 / 接管 / 改路径（§3 v1、§5.2）----
+
+    /// 建一条纯工具 SOP（无人工门），跑完拿到 run 后手动回退状态为 running 供干预测试。
+    fn install_plain_tool_sop(c: &Connection) {
+        demo_install(c).unwrap();
+        let def = json!({
+            "version": 1,
+            "nodes": [
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"mcp_tool","config":{"tool":"demo:check_anomalies","args":{"anomalies":3}}},
+                {"id":"n2","type":"end","config":{}}
+            ],
+            "edges": [{"from":"n0","to":"n1"},{"from":"n1","to":"n2"}]
+        });
+        let p = crate::models::SopUpsertPayload {
+            id: Some("sop-control".into()), name: "干预测试".into(),
+            trigger_json: "{}".into(), risk: "low".into(), owner_policy: "agent".into(),
+            definition: def, expect_version: None,
+        };
+        store::upsert_sop(c, &p).unwrap();
+    }
+
+    fn running_run(c: &Connection) -> String {
+        install_plain_tool_sop(c);
+        let run_id = start_run(c, "sop-control", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        assert_eq!(store::get_run(c, &run_id).unwrap().status, "done", "基线应跑完");
+        // 测试用：回退到 running 并停在 n1（End 节点会清空游标），保留产物，模拟"运行中暂停"。
+        c.execute("UPDATE runs SET status='running', current_node='n1' WHERE id=?1", params![run_id]).unwrap();
+        run_id
+    }
+
+    #[test]
+    fn pause_keeps_cursor_and_goes_wait_human() {
+        let c = db::open_in_memory().unwrap();
+        let run_id = running_run(&c);
+        let before = store::get_run(&c, &run_id).unwrap();
+        let s = control(&c, &run_id, "pause", None, None, &DemoTools, &MockProvider).unwrap();
+        assert_eq!(s, "wait_human");
+        let after = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(after.status, "wait_human");
+        assert_eq!(after.current_node, before.current_node, "暂停不改游标（保留上下文）");
+        assert_eq!(after.outputs_json, before.outputs_json, "暂停不改产物");
+        let gates = store::list_gates(&c, true).unwrap();
+        assert!(gates.iter().any(|g| g.run_id == run_id && g.reason == "pause"));
+    }
+
+    #[test]
+    fn resume_only_releases_pause_gate_and_finishes() {
+        let c = db::open_in_memory().unwrap();
+        let run_id = running_run(&c);
+        control(&c, &run_id, "pause", None, None, &DemoTools, &MockProvider).unwrap();
+        let s = control(&c, &run_id, "resume", None, None, &DemoTools, &MockProvider).unwrap();
+        assert_eq!(s, "done", "恢复后从当前步续跑到完成");
+        assert!(store::list_gates(&c, true).unwrap().iter().all(|g| g.run_id != run_id), "pause 门已裁决");
+    }
+
+    #[test]
+    fn resume_refuses_to_bypass_real_human_gate() {
+        let c = db::open_in_memory().unwrap();
+        install_plain_tool_sop(&c);
+        let run_id = start_run(&c, "sop-control", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        c.execute("UPDATE runs SET status='wait_human' WHERE id=?1", params![run_id]).unwrap();
+        // 插一个真实人工门（非 pause）
+        let sid = store::step_id_for_node(&c, &run_id, "n1").unwrap().unwrap();
+        store::insert_gate(&c, &run_id, &sid, "approval", "高风险确认", None).unwrap();
+        // resume 必须拒绝，不能绕过真实门
+        let r = control(&c, &run_id, "resume", None, None, &DemoTools, &MockProvider);
+        assert!(r.is_err(), "存在真实人工门时 resume 必须拒绝");
+        assert!(r.unwrap_err().to_string().contains("真实人工门"));
+    }
+
+    #[test]
+    fn takeover_marks_step_human_and_logs() {
+        let c = db::open_in_memory().unwrap();
+        let run_id = running_run(&c);
+        let s = control(&c, &run_id, "takeover", None, Some("我来接手"), &DemoTools, &MockProvider).unwrap();
+        assert_eq!(s, "wait_human");
+        let sid = store::step_id_for_node(&c, &run_id, "n1").unwrap().unwrap();
+        let owner: String = c.query_row("SELECT owner FROM steps WHERE id=?1", params![sid], |r| r.get(0)).unwrap();
+        assert_eq!(owner, "human", "接管后当前步 owner=human");
+        let gates = store::list_gates(&c, true).unwrap();
+        assert!(gates.iter().any(|g| g.run_id == run_id && g.reason == "takeover"));
+        let human_logs: i64 = c.query_row(
+            "SELECT COUNT(*) FROM step_logs WHERE step_id=?1 AND actor='human'", params![sid], |r| r.get(0),
+        ).unwrap();
+        assert!(human_logs >= 1, "接管须写 actor=human 日志");
+    }
+
+    #[test]
+    fn change_path_validates_target_and_keeps_context() {
+        let c = db::open_in_memory().unwrap();
+        let run_id = running_run(&c);
+        // 非法目标节点被拒
+        assert!(control(&c, &run_id, "change_path", Some("n99"), None, &DemoTools, &MockProvider).is_err());
+        // 合法目标：改游标到 n2（end），outputs 保留
+        let before = store::get_run(&c, &run_id).unwrap();
+        let s = control(&c, &run_id, "change_path", Some("n2"), Some("跳过工具"), &DemoTools, &MockProvider).unwrap();
+        assert_eq!(s, "done", "改路径到 end 后完成");
+        let after = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(after.outputs_json, before.outputs_json, "改路径不改产物（上下文保留）");
     }
 }

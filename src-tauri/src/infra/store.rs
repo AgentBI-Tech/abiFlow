@@ -293,6 +293,16 @@ pub fn bump_reject_count(conn: &Connection, id: &str) -> AppResult<i32> {
     Ok(n)
 }
 
+/// 把当前 run 某步骤的 owner 改为 human（人工接管）。仅改本次 run 的 step，不改 SOP 定义。
+pub fn set_step_owner(conn: &Connection, step_id: &str, owner: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE steps SET owner=?2 WHERE id=?1",
+        params![step_id, owner],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
 /// 在 run.note 末尾追加一段留痕（不覆盖既有说明）。用于仲裁说明跨重试保留。
 pub fn append_run_note(conn: &Connection, id: &str, extra: &str) -> AppResult<()> {
     let cur: Option<String> = conn
