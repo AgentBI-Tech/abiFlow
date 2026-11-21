@@ -10,6 +10,7 @@ pub mod gateway;
 pub mod template_reuse;
 pub mod keystore;
 pub mod llm;
+pub mod mcp;
 pub mod reviewer;
 pub mod scheduler;
 pub mod sop;

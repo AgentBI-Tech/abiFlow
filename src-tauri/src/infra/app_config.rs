@@ -26,7 +26,15 @@ pub struct McpServer {
     pub args: Vec<String>,
     #[serde(default)]
     pub note: String,
+    /// 传输方式：stdio（默认，按 command+args 启子进程）或 http（按 url POST）。旧配置无此字段→默认 stdio。
+    #[serde(default = "default_transport")]
+    pub transport: String,
+    /// http 传输的目标 url（stdio 时忽略）。
+    #[serde(default)]
+    pub url: String,
 }
+
+fn default_transport() -> String { "stdio".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpServers {
@@ -145,7 +153,7 @@ mod tests {
     #[test]
     fn mcp_crud() {
         let id = format!("srv-{}", std::process::id());
-        let s = McpServer { id: id.clone(), command: "npx".into(), args: vec!["x".into()], note: "预备".into() };
+        let s = McpServer { id: id.clone(), command: "npx".into(), args: vec!["x".into()], note: "预备".into(), transport: "stdio".into(), url: String::new() };
         let list = mcp_add(s).unwrap();
         assert!(list.iter().any(|x| x.id == id));
         let list = mcp_remove(&id).unwrap();

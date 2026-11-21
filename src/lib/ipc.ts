@@ -366,7 +366,7 @@ export function configGet(): Promise<Record<string, string>> {
 export function configSet(key: string, value: string): Promise<void> {
   return invoke("config_set", { payload: { key, value } });
 }
-export type McpServerInfo = { id: string; command: string; args: string[]; note: string };
+export type McpServerInfo = { id: string; command: string; args: string[]; note: string; transport: string; url: string };
 export function mcpServerList(): Promise<McpServerInfo[]> {
   return invoke("mcp_server_list");
 }

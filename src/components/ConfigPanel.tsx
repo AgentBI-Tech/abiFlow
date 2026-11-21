@@ -13,7 +13,7 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
   const [cfg, setCfg] = useState<Record<string, string>>({});
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const [newSrv, setNewSrv] = useState<McpServerInfo>({ id: "", command: "", args: [], note: "" });
+  const [newSrv, setNewSrv] = useState<McpServerInfo>({ id: "", command: "", args: [], note: "", transport: "stdio", url: "" });
   const [busy, setBusy] = useState("");
 
   const load = async () => {
@@ -42,7 +42,7 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
     setBusy("add-srv");
     try {
       setServers(await mcpServerAdd({ ...newSrv, args: newSrv.args.filter(Boolean) }));
-      setNewSrv({ id: "", command: "", args: [], note: "" });
+      setNewSrv({ id: "", command: "", args: [], note: "", transport: "stdio", url: "" });
       onError("");
     } catch (e) { onError(errMessage(e)); }
     finally { setBusy(""); }
@@ -85,7 +85,7 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
         <ul className="list">
           {servers.map((s) => (
             <li key={s.id} data-testid="mcp-server-item">
-              <div className="row"><strong>{s.id}</strong><span className="ver">{s.command} {s.args.join(" ")}</span></div>
+              <div className="row"><strong>{s.id}</strong><span className="ver">{s.transport === "http" ? s.url : `${s.command} ${s.args.join(" ")}`}</span><span className="pill">{s.transport ?? "stdio"}</span></div>
               {s.note && <p className="sub-row">{s.note}</p>}
               <div className="row actions">
                 <button disabled={!!busy} onClick={() => removeSrv(s.id)}>删除</button>
@@ -96,8 +96,20 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
         </ul>
         <div className="stack">
           <label className="stack">id <input value={newSrv.id} onChange={(e) => setNewSrv({ ...newSrv, id: e.target.value })} /></label>
-          <label className="stack">command <input value={newSrv.command} onChange={(e) => setNewSrv({ ...newSrv, command: e.target.value })} placeholder="npx / uvx" /></label>
-          <label className="stack">args（空格分隔） <input value={newSrv.args.join(" ")} onChange={(e) => setNewSrv({ ...newSrv, args: e.target.value.split(/\s+/).filter(Boolean) })} /></label>
+          <label className="stack">传输方式
+            <select value={newSrv.transport ?? "stdio"} onChange={(e) => setNewSrv({ ...newSrv, transport: e.target.value })}>
+              <option value="stdio">stdio（command+args 启子进程）</option>
+              <option value="http">http（POST 到 url）</option>
+            </select>
+          </label>
+          {newSrv.transport === "http" ? (
+            <label className="stack">url <input value={newSrv.url ?? ""} onChange={(e) => setNewSrv({ ...newSrv, url: e.target.value })} placeholder="http://127.0.0.1:8891/" /></label>
+          ) : (
+            <>
+              <label className="stack">command <input value={newSrv.command} onChange={(e) => setNewSrv({ ...newSrv, command: e.target.value })} placeholder="npx / uvx / python3" /></label>
+              <label className="stack">args（空格分隔） <input value={newSrv.args.join(" ")} onChange={(e) => setNewSrv({ ...newSrv, args: e.target.value.split(/\s+/).filter(Boolean) })} /></label>
+            </>
+          )}
           <label className="stack">说明 <input value={newSrv.note} onChange={(e) => setNewSrv({ ...newSrv, note: e.target.value })} /></label>
           <div className="row actions"><button disabled={!!busy} onClick={addSrv}>添加</button></div>
         </div>

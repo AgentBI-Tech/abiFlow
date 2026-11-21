@@ -5,11 +5,16 @@ use serde_json::{json, Value};
 
 use crate::domain::executor::ToolRunner;
 use crate::domain::keystore::KeyStore;
+use crate::domain::mcp::{HttpTransport, McpClient, StdioTransport};
+use crate::infra::app_config;
 use crate::models::{AppError, AppResult};
 
 /// 配置驱动的工具引擎：按 tools.scope_json 的 `kind` 分派。
 /// - `builtin`：内置只读 demo（合成数据）。
 /// - `http`：通用 HTTP 工具（method/url/query/headers/body 均由配置 + 占位符决定）。
+/// - `mcp`：MCP server 工具（server 指向 mcp_servers.json 的配置，tool 是 tools/list 里的名字）。
+///   stdio 按 command+args 启子进程、http 按 url POST；协议走 domain/mcp.rs。
+///   **当前为协议栈框架**：需真实 MCP server 才能真正调用，内置 fake server 用于端到端验证。
 ///
 /// 不绑定任何具体站点：谁都能改 scope_json 指向自己的服务。密钥只从 keystore 按 ref 取，
 /// 占位符值只进请求、不进任何日志/DB。
@@ -29,6 +34,7 @@ impl ToolRunner for ToolEngine {
         match kind {
             "builtin" => run_builtin(tool, args),
             "http" => run_http(args, scope, self.ks.as_ref()),
+            "mcp" => run_mcp(args, scope, self.ks.as_ref()),
             other => Err(AppError::McpUnavailable(format!("未知工具 kind：{}", other))),
         }
     }
@@ -91,6 +97,51 @@ fn resolve_value(v: &Value, args: &Value, ks: &dyn KeyStore) -> AppResult<Value>
             Ok(Value::Array(out))
         }
         other => Ok(other.clone()),
+    }
+}
+
+/// MCP 工具调用：scope = {kind:"mcp", server:"<id>", tool:"<name>"}。
+/// 1) 按 server id 取配置（mcp_servers.json）→ 2) 建 transport → 3) initialize 握手
+/// → 4) tools/call(server 侧工具名, args) → 5) 返回 content 结果。
+/// args 里的 {{cred:ref}} 占位符先经 keystore 解析（值只进请求、不进日志）。
+fn run_mcp(args: &Value, scope: &Value, ks: &dyn KeyStore) -> AppResult<Value> {
+    let server_id = scope.get("server").and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::InvalidInput("MCP 工具缺 server 配置".into()))?;
+    let tool_name = scope.get("tool").and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::InvalidInput("MCP 工具缺 tool 配置".into()))?;
+    let servers = app_config::mcp_list()?;
+    let server = servers.into_iter().find(|s| s.id == server_id)
+        .ok_or_else(|| AppError::McpUnavailable(format!("MCP server 未配置：{}", server_id)))?;
+
+    // 解析 args 里的占位符（密钥只从 keystore 取、不回显）。
+    let safe_args = resolve_value(args, args, ks)?;
+
+    let result = if server.transport == "http" {
+        if server.url.is_empty() {
+            return Err(AppError::McpUnavailable("MCP http server 缺 url".into()));
+        }
+        let mut client = McpClient::new(HttpTransport::new(&server.url));
+        client.initialize()?;
+        client.call_tool(tool_name, &safe_args)?
+    } else {
+        // 默认 stdio：command + args 启动子进程。
+        let mut client = McpClient::new(StdioTransport::spawn(&server.command, &server.args)?);
+        client.initialize()?;
+        client.call_tool(tool_name, &safe_args)?
+    };
+
+    // tools/call 结果是 {content:[{type:"text",text:"..."}], isError?:bool}；拍平成可读文本。
+    if result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let msg = result.get("content").and_then(|v| v.as_array())
+            .and_then(|a| a.first()).and_then(|c| c.get("text")).and_then(|t| t.as_str())
+            .unwrap_or("MCP 工具返回错误");
+        return Err(AppError::McpUnavailable(format!("MCP 工具错误：{}", msg)));
+    }
+    let text = result.get("content").and_then(|v| v.as_array())
+        .and_then(|a| a.first()).and_then(|c| c.get("text")).and_then(|t| t.as_str());
+    match text {
+        Some(t) => Ok(serde_json::from_str(t).unwrap_or_else(|_| json!({"text": t}))),
+        None => Ok(result),
     }
 }
 
@@ -181,6 +232,28 @@ mod tests {
     fn missing_cred_is_error_not_panic() {
         let ks = MemoryKeyStore::new();
         assert!(resolve_placeholders("{{cred:nope}}", &json!({}), &ks).is_err());
+    }
+
+    #[test]
+    fn mcp_kind_calls_fake_server_end_to_end() {
+        // 配置一个 stdio fake server，工具 scope 指向它，验证 ToolEngine 的 mcp 分派。
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().join("tests").join("fixtures").join("fake_mcp_stdio.py")
+            .to_string_lossy().to_string();
+        let id = format!("te-mcp-{}", std::process::id());
+        let _ = app_config::mcp_remove(&id); // 清理可能残留
+        app_config::mcp_add(app_config::McpServer {
+            id: id.clone(), command: "python3".into(), args: vec![fixture],
+            note: "tool_engine 测试".into(), transport: "stdio".into(), url: String::new(),
+        }).unwrap();
+
+        let ks = MemoryKeyStore::new();
+        let engine = ToolEngine::new(std::sync::Arc::new(ks) as std::sync::Arc<dyn KeyStore>);
+        let scope = json!({"kind": "mcp", "server": id, "tool": "add"});
+        let out = engine.run("mcp:add", &json!({"a": 10, "b": 5}), &scope).unwrap();
+        assert_eq!(out["sum"], 15, "ToolEngine 应经 MCP 协议栈拿到真实结果");
+
+        let _ = app_config::mcp_remove(&id); // 清理
     }
 
     #[test]

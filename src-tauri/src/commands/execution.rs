@@ -89,7 +89,7 @@ pub fn config_set(payload: ConfigSetPayload) -> AppResult<()> {
 pub fn mcp_server_list() -> AppResult<Vec<McpServerRow>> {
     Ok(app_config::mcp_list()?
         .into_iter()
-        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note })
+        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note, transport: s.transport, url: s.url })
         .collect())
 }
 
@@ -97,10 +97,11 @@ pub fn mcp_server_list() -> AppResult<Vec<McpServerRow>> {
 pub fn mcp_server_add(payload: McpServerPayload) -> AppResult<Vec<McpServerRow>> {
     let server = app_config::McpServer {
         id: payload.id, command: payload.command, args: payload.args, note: payload.note,
+        transport: payload.transport, url: payload.url,
     };
     Ok(app_config::mcp_add(server)?
         .into_iter()
-        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note })
+        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note, transport: s.transport, url: s.url })
         .collect())
 }
 
@@ -108,7 +109,7 @@ pub fn mcp_server_add(payload: McpServerPayload) -> AppResult<Vec<McpServerRow>>
 pub fn mcp_server_remove(id: String) -> AppResult<Vec<McpServerRow>> {
     Ok(app_config::mcp_remove(&id)?
         .into_iter()
-        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note })
+        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note, transport: s.transport, url: s.url })
         .collect())
 }
 

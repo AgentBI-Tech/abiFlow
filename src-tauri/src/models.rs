@@ -43,6 +43,8 @@ pub struct McpServerRow {
     pub command: String,
     pub args: Vec<String>,
     pub note: String,
+    pub transport: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,7 +56,13 @@ pub struct McpServerPayload {
     pub args: Vec<String>,
     #[serde(default)]
     pub note: String,
+    #[serde(default = "default_mcp_transport")]
+    pub transport: String,
+    #[serde(default)]
+    pub url: String,
 }
+
+fn default_mcp_transport() -> String { "stdio".into() }
 
 // ---- v0.2 执行闭环的数据传输对象（对齐实现设计 §2 / §3.1） ----
 
