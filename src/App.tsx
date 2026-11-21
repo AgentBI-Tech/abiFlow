@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
@@ -57,6 +58,20 @@ export default function App() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // 后端状态变更事件只当「该刷新了」的提示；真相仍以 dashboardGet / run_get 拉取为准。
+  useEffect(() => {
+    let alive = true;
+    const events = ["run:status", "step:update", "gate:requested", "review:result", "tool:audit"];
+    let cancels: Array<() => void> = [];
+    Promise.all(events.map((name) =>
+      listen(name, () => { if (alive) void refresh(); })
+    )).then((fns) => {
+      if (!alive) { fns.forEach((f) => f()); return; }
+      cancels = fns;
+    }).catch(() => { /* 非 Tauri 环境（如浏览器预览）无事件，忽略 */ });
+    return () => { alive = false; cancels.forEach((f) => f()); };
+  }, [refresh]);
 
   async function act(label: string, fn: () => Promise<unknown>) {
     setBusy(label);

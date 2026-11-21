@@ -13,6 +13,7 @@ use crate::domain::keystore::{KeyStore, MemoryKeyStore};
 use crate::domain::llm::{self, LlmProvider};
 use crate::domain::scheduler;
 use crate::infra::db;
+use crate::infra::events;
 use crate::infra::tool_engine::ToolEngine;
 
 struct SchedulerStop(Arc<AtomicBool>);
@@ -34,6 +35,8 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
+            // 后端→前端事件推送：store 状态变更后 emit，前端只当刷新提示。
+            events::init(handle.clone());
             let stop = Arc::new(AtomicBool::new(false));
             app.manage(SchedulerStop(stop.clone()));
             let ks: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());

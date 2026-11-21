@@ -2,10 +2,18 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::infra::events;
+
 use crate::models::{
     now_secs, new_id, AcceptanceRow, AppError, AppResult, DashboardData, DueSchedule, GateRow, RunDetail,
     RunRow, ScheduleInfo, SopRow, SopUpsertPayload, StepRow,
 };
+
+/// 由 step id 反查 run id（事件 payload 需要；查不到返回空串）。
+fn run_id_for_step(conn: &Connection, step_id: &str) -> String {
+    conn.query_row("SELECT run_id FROM steps WHERE id=?1", params![step_id], |r| r.get::<_, String>(0))
+        .unwrap_or_default()
+}
 
 // ---- SOP ----
 
@@ -277,6 +285,7 @@ pub fn update_run_status(
         params![id, status, verdict, note, finished],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    events::emit(events::RUN_STATUS, events::RunStatus { runId: id.to_string(), status: status.to_string() });
     Ok(())
 }
 
@@ -389,6 +398,10 @@ pub fn update_step(
         params![id, status, input_json, output_json, started, finished],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    events::emit(
+        events::STEP_UPDATE,
+        events::StepUpdate { runId: run_id_for_step(conn, id), stepId: id.to_string(), status: status.to_string() },
+    );
     Ok(())
 }
 
@@ -448,6 +461,17 @@ pub fn insert_log(
         ],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    // tool:audit 只在实际有工具命令时发（agent 工具调用 / 接管等），不留痕的纯文本步不发。
+    if tool_command.is_some() {
+        events::emit(
+            events::TOOL_AUDIT,
+            events::ToolAudit {
+                runId: run_id_for_step(conn, step_id),
+                stepId: step_id.to_string(),
+                tool: tool_command.map(|s| s.to_string()),
+            },
+        );
+    }
     Ok(())
 }
 
@@ -466,6 +490,10 @@ pub fn insert_gate(
         params![id, run_id, step_id, reason, prompt, payload_json, now_secs()],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    events::emit(
+        events::GATE_REQUESTED,
+        events::GateRequested { gateId: id.clone(), runId: run_id.to_string(), reason: reason.to_string() },
+    );
     Ok(id)
 }
 
@@ -550,6 +578,7 @@ pub fn insert_acceptance(
         params![run_id, criterion, passed as i64, checked_by, note, now_secs()],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    events::emit(events::REVIEW_RESULT, events::ReviewResult { runId: run_id.to_string(), passed });
     Ok(())
 }
 
