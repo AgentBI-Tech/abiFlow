@@ -4,6 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
 use crate::domain::audit::redact_value;
+use crate::domain::circuit_breaker::{self, DEFAULT_CONFIDENCE_THRESHOLD};
 use crate::domain::gateway::{self, Actor, Decision, Mode};
 use crate::domain::llm::LlmProvider;
 use crate::domain::reviewer;
@@ -364,6 +365,45 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dy
                     obj.insert("provider".into(), json!(llm.name()));
                     obj.insert("mock".into(), json!(llm.is_mock()));
                 }
+
+                // 熔断（§5.2 转人工判定③）：置信度低 / 原地打转 → 停人工门，不把无进展产物写入 outputs。
+                let threshold = node
+                    .config
+                    .get("confidence_threshold")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(DEFAULT_CONFIDENCE_THRESHOLD);
+                if let Some(reason) = circuit_breaker::check_agent_output(&safe, &outputs, threshold) {
+                    let (gate_reason, prompt, payload, log_detail) = match &reason {
+                        circuit_breaker::BreakReason::LowConfidence { score, threshold } => (
+                            "low_confidence",
+                            format!("Agent 置信度 {:.2} 低于阈值 {:.2}，请人工核实后放行或驳回", score, threshold),
+                            json!({"score": score, "threshold": threshold}).to_string(),
+                            "熔断：低置信度",
+                        ),
+                        circuit_breaker::BreakReason::Loop { same_as } => (
+                            "loop",
+                            format!("Agent 产出与步骤 {} 完全相同，疑似原地打转，请人工介入", same_as),
+                            json!({"same_as": same_as}).to_string(),
+                            "熔断：原地打转",
+                        ),
+                    };
+                    if let Some(ref id) = step_id {
+                        store::update_step(conn, id, "wait_human", None, None)?;
+                        store::insert_gate(conn, run_id, id, gate_reason, &prompt, Some(&payload))?;
+                        // verdict 受 CHECK 限制（ok/fail/needs_human）；原因写 output_redact。
+                        store::insert_log(conn, id, "agent", Some(llm.name()), None, Some(log_detail), Some("needs_human"))?;
+                    }
+                    store::update_run_status(conn, run_id, "wait_human", None, Some(log_detail))?;
+                    store::update_run_cursor(
+                        conn,
+                        run_id,
+                        Some(&current),
+                        &serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into()),
+                        &serde_json::to_string(&skipped).unwrap_or_else(|_| "[]".into()),
+                    )?;
+                    return Ok("wait_human".into());
+                }
+
                 let out_str = serde_json::to_string(&safe).unwrap_or_else(|_| "{}".into());
                 if let Some(ref id) = step_id {
                     store::update_step(conn, id, "done", None, Some(&out_str))?;
@@ -1009,5 +1049,104 @@ mod sop_parse_tests {
         let run_id = start_run(&c, "sop-reject", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
         let s = store::get_run(&c, &run_id).unwrap().status;
         assert_eq!(s, "wait_human", "高风险工具必须停人工门，不得因打回机制绕过");
+    }
+
+    // ---- 熔断：低置信度 / 原地打转转人工（§5.2 判定③）----
+
+    /// 固定返回一段 JSON 的 provider（非 mock），用于构造低置信度/打转产物。
+    struct FixedJsonProvider {
+        answer: String,
+    }
+    impl LlmProvider for FixedJsonProvider {
+        fn name(&self) -> &str { "fixed-json" }
+        fn is_mock(&self) -> bool { false }
+        fn generate(&self, _prompt: &str) -> AppResult<String> { Ok(self.answer.clone()) }
+    }
+
+    fn install_agent_sop(c: &Connection, nodes: serde_json::Value, edges: serde_json::Value) {
+        let def = json!({"version": 1, "nodes": nodes, "edges": edges});
+        let p = crate::models::SopUpsertPayload {
+            id: Some("sop-breaker".into()), name: "熔断测试".into(),
+            trigger_json: "{}".into(), risk: "low".into(), owner_policy: "agent".into(),
+            definition: def, expect_version: None,
+        };
+        store::upsert_sop(c, &p).unwrap();
+    }
+
+    #[test]
+    fn low_confidence_stops_at_human_gate() {
+        let c = db::open_in_memory().unwrap();
+        install_agent_sop(&c,
+            json!([
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"agent_step","config":{"goal":"核对"}},
+                {"id":"n2","type":"end","config":{}}
+            ]),
+            json!([{"from":"n0","to":"n1"},{"from":"n1","to":"n2"}]));
+        let llm = FixedJsonProvider { answer: r#"{"confidence":0.2,"text":"不确定"}"#.into() };
+        let run_id = start_run(&c, "sop-breaker", "build", "manual", &json!({}), &DemoTools, &llm).unwrap();
+        let run = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(run.status, "wait_human", "低置信度应停人工门");
+        let gates = store::list_gates(&c, true).unwrap();
+        assert!(gates.iter().any(|g| g.reason == "low_confidence"), "应有低置信度门");
+        // 产物未写入 outputs：验收门/后续步不应拿到这次无进展结论。
+        let steps = store::list_steps(&c, &run_id).unwrap();
+        assert!(steps.iter().any(|s| s.status == "wait_human"), "当前步应待人工");
+    }
+
+    #[test]
+    fn loop_stops_at_human_gate_with_custom_threshold_ignored() {
+        // 两步 agent_step 产出逐字相同（规范化后）→ 第二步触发原地打转门。
+        // provider/mock 标注会被加入产物，两次相同 provider 不影响比对。
+        let c = db::open_in_memory().unwrap();
+        install_agent_sop(&c,
+            json!([
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"agent_step","config":{"goal":"第一步"}},
+                {"id":"n2","type":"agent_step","config":{"goal":"第二步"}},
+                {"id":"n3","type":"end","config":{}}
+            ]),
+            json!([{"from":"n0","to":"n1"},{"from":"n1","to":"n2"},{"from":"n2","to":"n3"}]));
+        let llm = FixedJsonProvider { answer: r#"{"text":"永远同一句"}"#.into() };
+        let run_id = start_run(&c, "sop-breaker", "build", "manual", &json!({}), &DemoTools, &llm).unwrap();
+        assert_eq!(store::get_run(&c, &run_id).unwrap().status, "wait_human");
+        let gates = store::list_gates(&c, true).unwrap();
+        assert!(gates.iter().any(|g| g.reason == "loop"), "应触发原地打转门");
+    }
+
+    #[test]
+    fn normal_confidence_passes_without_gate() {
+        let c = db::open_in_memory().unwrap();
+        install_agent_sop(&c,
+            json!([
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"agent_step","config":{"goal":"核对"}},
+                {"id":"n2","type":"end","config":{}}
+            ]),
+            json!([{"from":"n0","to":"n1"},{"from":"n1","to":"n2"}]));
+        let llm = FixedJsonProvider { answer: r#"{"confidence":0.9,"text":"确定"}"#.into() };
+        let run_id = start_run(&c, "sop-breaker", "build", "manual", &json!({}), &DemoTools, &llm).unwrap();
+        assert_eq!(store::get_run(&c, &run_id).unwrap().status, "done", "正常产物应直接完成");
+        assert!(store::list_gates(&c, true).unwrap().is_empty(), "不应产生人工门");
+    }
+
+    #[test]
+    fn circuit_breaker_override_resumes_run() {
+        let c = db::open_in_memory().unwrap();
+        install_agent_sop(&c,
+            json!([
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"agent_step","config":{"goal":"核对"}},
+                {"id":"n2","type":"end","config":{}}
+            ]),
+            json!([{"from":"n0","to":"n1"},{"from":"n1","to":"n2"}]));
+        let llm = FixedJsonProvider { answer: r#"{"confidence":0.1,"text":"不确定"}"#.into() };
+        let run_id = start_run(&c, "sop-breaker", "build", "manual", &json!({}), &DemoTools, &llm).unwrap();
+        let gate = &store::list_gates(&c, true).unwrap()[0];
+        assert_eq!(gate.reason, "low_confidence");
+        // 人批准 → 续跑。因产物未入 outputs，重跑仍低置信度会再次停门；这里只验裁决链路通畅。
+        store::decide_gate(&c, &gate.id, "approve", Some("人工确认采纳")).unwrap();
+        let s = resume_after_gate(&c, &run_id, &DemoTools, &llm).unwrap();
+        assert_eq!(s, "wait_human", "批准后重跑仍低置信度，再次停门待裁决");
     }
 }
