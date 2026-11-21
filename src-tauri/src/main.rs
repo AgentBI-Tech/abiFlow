@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    abi_pilot_lib::run()
+    abi_flow_lib::run()
 }

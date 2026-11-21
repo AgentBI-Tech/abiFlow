@@ -1,4 +1,4 @@
--- ABI-Pilot schema v4（v0.5 实际放权）
+-- abiFlow schema v4（v0.5 实际放权）
 -- owner 决策审计：人确认/驳回一次 owner 升级的留痕。
 -- from_owner 记「human」，to_owner 记「agent」（驳回时为 human）；资金/不可逆动作由 domain 层硬拦。
 -- 真正的 owner 变更落在 SOP 定义节点 config.owner 上（版本递增），本表只留审计事实。

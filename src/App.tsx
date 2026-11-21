@@ -74,9 +74,9 @@ export default function App() {
   }
 
   return (
-    <main className="wrap" data-app="abi-pilot">
+    <main className="wrap" data-app="abiflow">
       <header>
-        <h1>ABI-Pilot</h1>
+        <h1>abiFlow</h1>
         <p className="sub">人机协同电商运营工作台 · 通用工具（工具即数据，agentbi.tech 为首个示例）</p>
         <div className="tabs">
           <button className={tab === "board" ? "tab on" : "tab"} onClick={() => setTab("board")}>运营看板</button>

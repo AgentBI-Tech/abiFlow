@@ -1,4 +1,4 @@
-# ABI-Pilot
+# abiFlow
 
 面向电商独立站运营者的人机协同桌面工作台：本地优先，Tauri 2 + React + Rust + SQLite。
 

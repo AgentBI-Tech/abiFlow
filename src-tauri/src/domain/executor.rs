@@ -767,7 +767,7 @@ pub fn parse_sop_text(
         return Err(AppError::InvalidInput("描述不得为空".into()));
     }
     let prompt = format!(
-        "SOP_DRAFT: 把下面的运营需求解析成 ABI-Pilot SOP AST（JSON）。\
+        "SOP_DRAFT: 把下面的运营需求解析成 abiFlow SOP AST（JSON）。\
          节点类型只用 start/agent_step/mcp_tool/human_gate/condition/acceptance/end。\
          资金/不可逆动作必须配 human_gate。需求：{}",
         text

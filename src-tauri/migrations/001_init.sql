@@ -1,4 +1,4 @@
--- ABI-Pilot schema v1（对齐《方案_ABI-Pilot_实现设计》§2）
+-- abiFlow schema v1（对齐《方案_ABI-Pilot_实现设计》§2）
 -- 幂等：全部 CREATE ... IF NOT EXISTS，可安全重放。
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;

@@ -47,7 +47,7 @@ pub fn run() {
                     break;
                 }
                 if let Ok(dir) = handle.path().app_data_dir() {
-                    let path = dir.join("abi-pilot").join("abi.db");
+                    let path = dir.join("abiflow").join("abi.db");
                     if let Ok(conn) = db::open(&path) {
                         let _ = scheduler::tick(&conn, &engine, llm.as_ref());
                     }
@@ -105,7 +105,7 @@ pub fn run() {
             commands::execution::llm_status,
         ])
         .run(tauri::generate_context!())
-        .expect("ABI-Pilot 启动失败");
+        .expect("abiFlow 启动失败");
 }
 
 #[cfg(test)]

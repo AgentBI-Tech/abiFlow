@@ -1,14 +1,14 @@
 [package]
-name = "abi-pilot"
+name = "abi-flow"
 version = "0.1.0"
-description = "ABI-Pilot - human-AI collaboration desktop workbench for e-commerce operations"
-authors = ["ABI-Pilot"]
+description = "abiFlow - human-AI collaboration desktop workbench for e-commerce operations"
+authors = ["abiFlow"]
 edition = "2021"
 license = "AGPL-3.0-only"
 rust-version = "1.77.2"
 
 [lib]
-name = "abi_pilot_lib"
+name = "abi_flow_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -27,7 +27,7 @@ pub(crate) fn db_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
         .path()
         .app_data_dir()
         .map_err(|e| AppError::Db(e.to_string()))?;
-    Ok(dir.join("abi-pilot").join("abi.db"))
+    Ok(dir.join("abiflow").join("abi.db"))
 }
 
 fn open_db(app: &tauri::AppHandle) -> AppResult<rusqlite::Connection> {

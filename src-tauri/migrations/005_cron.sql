@@ -1,4 +1,4 @@
--- ABI-Pilot schema v5（v0.2 cron 标准语法）
+-- abiFlow schema v5（v0.2 cron 标准语法）
 -- schedules.cron_expr：NULL = 旧的 interval_secs 间隔模式（向后兼容）；
 -- 非 NULL = 标准 5 段 cron 表达式（分 时 日 月 周，按本地时区解释）。
 -- 该列的 ALTER 在 db.rs::migrate 里按存在性守卫执行（SQLite ALTER 无 IF NOT EXISTS），本文件仅作版本记录。

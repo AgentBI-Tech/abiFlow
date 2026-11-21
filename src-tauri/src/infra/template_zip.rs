@@ -22,7 +22,7 @@ pub fn export_zip(bundle: &TemplateBundle) -> AppResult<Vec<u8>> {
     let manifest_s = serde_json::to_string_pretty(&manifest)
         .map_err(|e| AppError::InvalidInput(e.to_string()))?;
     let readme = format!(
-        "ABI-Pilot 经验模板\n名称：{}\n验证通过：{}\n来源店铺：{}\n\nschema={}\n",
+        "abiFlow 经验模板\n名称：{}\n验证通过：{}\n来源店铺：{}\n\nschema={}\n",
         bundle.name,
         if bundle.validated { "是" } else { "否" },
         bundle.source_shop.as_deref().unwrap_or("未标注"),

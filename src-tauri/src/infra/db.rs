@@ -19,7 +19,7 @@ const V2_COLUMNS: &[(&str, &str, &str)] = &[
 
 /// 打开（或创建）数据库并执行幂等迁移。
 pub fn open(path: &Path) -> AppResult<Connection> {
-    // SQLite 不会替我们建父目录；app_info 传入的 <app_data_dir>/abi-pilot/ 首次可能不存在。
+    // SQLite 不会替我们建父目录；app_info 传入的 <app_data_dir>/abiflow/ 首次可能不存在。
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| AppError::Db(format!("创建数据目录失败：{}", e)))?;
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn open_creates_nested_parent_dir() {
-        // 回归测试：app_info 传 <data>/abi-pilot/abi.db，父目录首次不存在，open 必须自建。
+        // 回归测试：app_info 传 <data>/abiflow/abi.db，父目录首次不存在，open 必须自建。
         let dir = tempfile::tempdir().expect("tempdir");
         let nested = dir.path().join("level1").join("level2").join("abi.db");
         assert!(!nested.parent().unwrap().exists(), "父目录起初不应存在");
