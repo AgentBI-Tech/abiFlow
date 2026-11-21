@@ -1346,6 +1346,9 @@ mod sop_parse_tests {
         let s = control(&c, &run_id, "change_path", Some("n2"), Some("跳过工具"), &DemoTools, &MockProvider).unwrap();
         assert_eq!(s, "done", "改路径到 end 后完成");
         let after = store::get_run(&c, &run_id).unwrap();
-        assert_eq!(after.outputs_json, before.outputs_json, "改路径不改产物（上下文保留）");
+        // 比较解析后的 JSON 值而非字符串：HashMap 序列化时 key 顺序不保证稳定。
+        let before_val: serde_json::Value = serde_json::from_str(&before.outputs_json).unwrap();
+        let after_val: serde_json::Value = serde_json::from_str(&after.outputs_json).unwrap();
+        assert_eq!(after_val, before_val, "改路径不改产物（上下文保留）");
     }
 }
