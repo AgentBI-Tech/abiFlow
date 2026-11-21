@@ -14,8 +14,8 @@ use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
 use crate::infra::{db, store, template_zip, tool_engine::ToolEngine};
 use crate::models::{
-    now_secs, AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunControlPayload,
-    RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
+    now_secs, AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunArbitratePayload,
+    RunControlPayload, RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
     SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
     CredentialSetPayload, CredentialRef, CorrectionInput, CorrectionRow, EfficiencyReport,
     TemplateBundle, TemplateCreatePayload, TemplateRow, TemplateReusePayload, UpgradeApprovePayload, UpgradeCandidate,
@@ -136,6 +136,35 @@ pub fn run_control(
 ) -> AppResult<String> {
     let conn = open_db(&app)?;
     executor::control(&conn, &payload.run_id, &payload.action)
+}
+
+/// 第 1 轮打回后重试（清空本轮验收留痕、游标回起点重跑；reject_count 不重置）。
+#[tauri::command]
+pub fn run_retry(
+    app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
+    llmst: tauri::State<'_, AppLlm>,
+    payload: RunControlPayload,
+) -> AppResult<String> {
+    let conn = open_db(&app)?;
+    let engine = ToolEngine::new(ks.0.clone());
+    executor::retry_rejected(&conn, &payload.run_id, &engine, llmst.0.as_ref())
+}
+
+/// 人工仲裁（review 状态）：resume 放行重跑 / fail 判失败。
+#[tauri::command]
+pub fn run_arbitrate(
+    app: tauri::AppHandle,
+    ks: tauri::State<'_, AppKeyStore>,
+    llmst: tauri::State<'_, AppLlm>,
+    payload: RunArbitratePayload,
+) -> AppResult<String> {
+    let conn = open_db(&app)?;
+    let engine = ToolEngine::new(ks.0.clone());
+    executor::arbitrate(
+        &conn, &payload.run_id, &payload.decision, payload.note.as_deref(),
+        &engine, llmst.0.as_ref(),
+    )
 }
 
 // ---- Gate ----

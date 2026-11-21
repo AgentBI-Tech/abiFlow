@@ -114,6 +114,7 @@ mod tests {
             mode: "build".into(), trigger_by: "manual".into(), started_at: Some(started),
             finished_at: None, verdict: None, note: None, definition_snapshot: None,
             current_node: None, outputs_json: "{}".into(), branch_skipped: "[]".into(),
+            reject_count: 0,
         }
     }
     fn sop(id: &str, name: &str, risk: &str) -> SopRow {

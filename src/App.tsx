@@ -10,6 +10,8 @@ import {
   errMessage,
   gateDecide,
   runGet,
+  runArbitrate,
+  runRetry,
   runStart,
   runAsAgent,
   scheduleSet,
@@ -21,8 +23,8 @@ import {
 } from "./lib/ipc";
 
 const STATUS_ZH: Record<string, string> = {
-  pending: "待运行", running: "运行中", wait_human: "待人工", rejected: "已驳回",
-  done: "完成", failed: "失败", cancelled: "已取消",
+  pending: "待运行", running: "运行中", wait_human: "待人工", rejected: "已打回",
+  review: "待仲裁", done: "完成", failed: "失败", cancelled: "已取消",
 };
 const VERDICT_ZH: Record<string, string> = { pass: "通过", fail: "未通过", partial: "部分" };
 
@@ -34,6 +36,7 @@ function fmtTime(ts: number | null): string {
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [arbNote, setArbNote] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm">("board");
@@ -284,13 +287,25 @@ export default function App() {
                       <strong>{STATUS_ZH[r.status] ?? r.status}</strong>
                       <span className="pill">{VERDICT_ZH[r.verdict ?? ""] ?? "—"}</span>
                       <span className="ver">{r.mode} · {r.triggerBy}</span>
+                      {r.rejectCount > 0 && <span className="pill off" data-testid="reject-count">打回 {r.rejectCount}</span>}
                     </div>
                     <div className="row sub-row">
                       <span>开始 {fmtTime(r.startedAt)}</span>
                       <span>结束 {fmtTime(r.finishedAt)}</span>
                       <span>{r.sopId}</span>
                     </div>
-                    <div className="row actions"><button disabled={!!busy} onClick={() => openRun(r)}>查看详情</button></div>
+                    <div className="row actions">
+                      <button disabled={!!busy} onClick={() => openRun(r)}>查看详情</button>
+                      {r.status === "rejected" && (
+                        <button disabled={!!busy} onClick={() => act("重试", () => runRetry(r.id))}>重试（第 2 轮）</button>
+                      )}
+                      {r.status === "review" && (
+                        <>
+                          <button disabled={!!busy} onClick={() => act("仲裁放行", () => runArbitrate(r.id, "resume"))}>仲裁放行</button>
+                          <button disabled={!!busy} onClick={() => act("仲裁失败", () => runArbitrate(r.id, "fail"))}>仲裁失败</button>
+                        </>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -321,6 +336,31 @@ export default function App() {
                 ))}
                 {detail.acceptance.length === 0 && <li className="empty">无验收项</li>}
               </ul>
+              {(detail.run.status === "rejected" || detail.run.status === "review") && (
+                <div className="stack" data-testid="arbitration-box">
+                  <label className="stack">
+                    仲裁/重试说明（可选，留痕）
+                    <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
+                  </label>
+                  <div className="row actions">
+                    {detail.run.status === "rejected" && (
+                      <button disabled={!!busy} onClick={() => act("重试", async () => { await runRetry(detail.run.id); setDetail(await runGet(detail.run.id)); })}>
+                        重试（第 2 轮）
+                      </button>
+                    )}
+                    {detail.run.status === "review" && (
+                      <>
+                        <button disabled={!!busy} onClick={() => act("仲裁放行", async () => { await runArbitrate(detail.run.id, "resume", arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>
+                          仲裁放行
+                        </button>
+                        <button disabled={!!busy} onClick={() => act("仲裁失败", async () => { await runArbitrate(detail.run.id, "fail", arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>
+                          仲裁失败
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
             </section>
           )}
         </>

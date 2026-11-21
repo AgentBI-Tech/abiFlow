@@ -30,6 +30,7 @@ export type RunRow = {
   currentNode: string | null;
   outputsJson: string;
   branchSkipped: string;
+  rejectCount: number;
 };
 
 export type StepRow = {
@@ -228,6 +229,14 @@ export function runList(sopId?: string, status?: string, limit?: number): Promis
 }
 export function runControl(runId: string, action: string): Promise<string> {
   return invoke("run_control", { payload: { runId, action } });
+}
+/** 第 1 轮打回后重试。 */
+export function runRetry(runId: string): Promise<string> {
+  return invoke("run_retry", { payload: { runId, action: "retry" } });
+}
+/** 人工仲裁（review 状态）：decision = resume | fail。 */
+export function runArbitrate(runId: string, decision: string, note?: string): Promise<string> {
+  return invoke("run_arbitrate", { payload: { runId, decision, note: note ?? null } });
 }
 export function gateDecide(gateId: string, decision: string, note?: string): Promise<void> {
   return invoke("gate_decide", { payload: { gateId, decision, note: note ?? null } });

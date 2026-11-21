@@ -1,0 +1,3 @@
+-- abiFlow schema v6（验收打回两轮→人工仲裁）
+-- runs.reject_count：本轮 run 的验收打回次数（0=未打回；1=已打回一次可重试；>=2=转 review 人工仲裁）。
+-- 不新增表，仅加列；幂等靠 db.rs 的列存在性守卫（SQLite ALTER 无 IF NOT EXISTS）。

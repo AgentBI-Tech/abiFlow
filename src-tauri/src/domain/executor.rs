@@ -434,17 +434,51 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dy
                     .and_then(|v| v.as_array())
                     .cloned()
                     .unwrap_or_default();
+                // 先收齐本轮评审结论，再判是否打回（避免部分写入后又回滚）。
+                let mut verdicts: Vec<(String, reviewer::ReviewVerdict)> = Vec::new();
                 for c in &criteria {
                     // 评审者核对：规则能求值走 rule，模糊标准（或 mode=llm）走 LLM。
                     let verdict = reviewer::review(c, &outputs, llm)?;
                     let expr = c.as_str().map(|s| s.to_string())
                         .or_else(|| c.get("criterion").and_then(|v| v.as_str()).map(|s| s.to_string()))
                         .unwrap_or_else(|| c.to_string());
+                    verdicts.push((expr, verdict));
+                }
+                let any_fail = verdicts.iter().any(|(_, v)| !v.passed);
+                if any_fail {
+                    // 评审不过 = 打回。资金/不可逆动作在任何情况下都不因打回自动放行，
+                    // 仍由各自的人工门管辖（本分支只改 run 状态与验收留痕，不碰工具授权）。
+                    let n = store::bump_reject_count(conn, run_id)?;
+                    for (expr, v) in &verdicts {
+                        let note = format!("第{}轮打回：{}", n, v.note);
+                        store::insert_acceptance(
+                            conn, run_id, expr, v.passed, v.checked_by, Some(&note),
+                        )?;
+                    }
+                    if let Some(id) = store::step_id_for_node(conn, run_id, &current)? {
+                        store::update_step(conn, &id, "failed", None, None)?;
+                    }
+                    // status 沿用既有 CHECK 允许的 rejected；轮次靠 reject_count 区分，
+                    // 仲裁理由写 note（note 无 CHECK），不引入新的 status/verdict 取值。
+                    if n >= 2 {
+                        store::update_run_status(
+                            conn, run_id, "rejected", None,
+                            Some("验收连续打回两轮，待人工仲裁"),
+                        )?;
+                        return Ok("rejected".into());
+                    }
+                    store::update_run_status(
+                        conn, run_id, "rejected", None,
+                        Some("验收第 1 轮打回，可重试"),
+                    )?;
+                    return Ok("rejected".into());
+                }
+                // 全部通过：写入验收留痕并前进（不变量 4 仍需 End 复核）。
+                for (expr, v) in &verdicts {
                     store::insert_acceptance(
-                        conn, run_id, &expr, verdict.passed, verdict.checked_by, Some(&verdict.note),
+                        conn, run_id, &expr, v.passed, v.checked_by, Some(&v.note),
                     )?;
                 }
-                // 不变量 4：所有 acceptance 必须 passed，否则终态 partial。
                 let step_id = store::step_id_for_node(conn, run_id, &current)?;
                 if let Some(id) = step_id {
                     store::update_step(conn, &id, "done", None, None)?;
@@ -481,6 +515,61 @@ pub fn resume_after_gate(
     }
     store::update_run_status(conn, run_id, "running", None, None)?;
     advance(conn, run_id, tools, llm)
+}
+
+/// 打回第 1 轮后的重试：清空本轮验收留痕、游标回退到起点重跑一遍（不重置 reject_count，
+/// 再不过即第 2 轮打回→转 review）。资金/不可逆动作仍走各自人工门，不因重试自动放行。
+pub fn retry_rejected(
+    conn: &Connection,
+    run_id: &str,
+    tools: &dyn ToolRunner,
+    llm: &dyn LlmProvider,
+) -> AppResult<String> {
+    let run = store::get_run(conn, run_id)?;
+    if run.status != "rejected" || run.reject_count >= 2 {
+        return Ok(run.status);
+    }
+    store::clear_acceptance(conn, run_id)?;
+    store::update_run_cursor(conn, run_id, None, &run.outputs_json, "[]")?;
+    store::update_run_status(conn, run_id, "running", None, Some("第 1 轮打回后重试"))?;
+    advance(conn, run_id, tools, llm)
+}
+
+/// 人工仲裁（打回两轮后）：resume = 清零打回计数与验收留痕后重跑（给一次带修正的机会）；
+/// fail = 直接判失败。仅 rejected 且 reject_count>=2（即打回两轮待仲裁）可调用。
+pub fn arbitrate(
+    conn: &Connection,
+    run_id: &str,
+    decision: &str,
+    note: Option<&str>,
+    tools: &dyn ToolRunner,
+    llm: &dyn LlmProvider,
+) -> AppResult<String> {
+    let run = store::get_run(conn, run_id)?;
+    if run.status != "rejected" || run.reject_count < 2 {
+        return Err(AppError::InvalidInput("仅打回两轮待仲裁的 run 可人工仲裁".into()));
+    }
+    match decision {
+        "resume" => {
+            store::clear_acceptance(conn, run_id)?;
+            store::reset_reject_count(conn, run_id)?;
+            store::update_run_cursor(conn, run_id, None, &run.outputs_json, "[]")?;
+            let decision_note = note.unwrap_or("人工仲裁：放行重跑");
+            store::update_run_status(conn, run_id, "running", None, Some(decision_note))?;
+            let final_status = advance(conn, run_id, tools, llm)?;
+            // advance 内打回/完成会重写 note，再把仲裁决定追加保留，确保可审计。
+            store::append_run_note(conn, run_id, decision_note)?;
+            Ok(final_status)
+        }
+        "fail" => {
+            store::update_run_status(
+                conn, run_id, "failed", Some("fail"),
+                Some(note.unwrap_or("人工仲裁：判失败")),
+            )?;
+            Ok("failed".into())
+        }
+        _ => Err(AppError::InvalidInput(format!("非法仲裁决定：{}", decision))),
+    }
 }
 
 /// 暂停/恢复/取消/接管。v0.2 只真正实现 cancel 与 takeover 改状态，其余返回提示。
@@ -815,5 +904,110 @@ mod sop_parse_tests {
     #[test]
     fn empty_input_rejected() {
         assert!(parse_sop_text("  ", &MockProvider).is_err());
+    }
+
+    // ---- 验收打回两轮 → 人工仲裁（§5 状态机）----
+
+    /// 建一条 SOP：start → demo 工具(anomalies=3) → acceptance(要求 ==99，规则通道必失败) → end。
+    fn install_reject_sop(c: &Connection) {
+        demo_install(c).unwrap(); // 注册 demo 工具与三模式授权
+        let def = json!({
+            "version": 1,
+            "nodes": [
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"mcp_tool","config":{"tool":"demo:check_anomalies","args":{"anomalies":3}}},
+                {"id":"n2","type":"acceptance","config":{"criteria":["steps.n1.anomalies == 99"]}},
+                {"id":"n3","type":"end","config":{}}
+            ],
+            "edges": [
+                {"from":"n0","to":"n1"},{"from":"n1","to":"n2"},{"from":"n2","to":"n3"}
+            ]
+        });
+        let p = crate::models::SopUpsertPayload {
+            id: Some("sop-reject".into()), name: "打回测试".into(),
+            trigger_json: "{}".into(), risk: "low".into(), owner_policy: "agent".into(),
+            definition: def, expect_version: None,
+        };
+        store::upsert_sop(c, &p).unwrap();
+    }
+
+    #[test]
+    fn first_acceptance_failure_marks_rejected() {
+        let c = db::open_in_memory().unwrap();
+        install_reject_sop(&c);
+        let run_id = start_run(&c, "sop-reject", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        let run = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(run.status, "rejected", "第 1 轮验收不过应打回");
+        assert_eq!(run.reject_count, 1, "打回计数应为 1");
+        let acc = store::list_acceptance(&c, &run_id).unwrap();
+        assert!(acc.iter().all(|a| !a.passed), "评审不过的验收项应记 passed=false");
+    }
+
+    #[test]
+    fn second_acceptance_failure_goes_to_review() {
+        let c = db::open_in_memory().unwrap();
+        install_reject_sop(&c);
+        let run_id = start_run(&c, "sop-reject", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        // 第 1 轮打回后重试：游标回起点、清空本轮验收，再跑一次仍不过 → 第 2 轮 → review。
+        let s = retry_rejected(&c, &run_id, &DemoTools, &MockProvider).unwrap();
+        assert_eq!(s, "rejected", "状态沿用 rejected，轮次靠 reject_count 区分");
+        let run = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(run.status, "rejected");
+        assert_eq!(run.reject_count, 2, "第 2 轮打回计数为 2（待仲裁）");
+        assert!(run.note.unwrap().contains("仲裁"), "note 标注待人工仲裁");
+    }
+
+    #[test]
+    fn arbitrate_resume_clears_and_retries() {
+        let c = db::open_in_memory().unwrap();
+        install_reject_sop(&c);
+        let run_id = start_run(&c, "sop-reject", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        retry_rejected(&c, &run_id, &DemoTools, &MockProvider).unwrap(); // → 打回两轮待仲裁
+        assert_eq!(store::get_run(&c, &run_id).unwrap().reject_count, 2);
+        // 仲裁放行：清零计数与验收留痕后重跑；规则仍不过 → 重新从第 1 轮打回开始。
+        let s = arbitrate(&c, &run_id, "resume", Some("仲裁放行重跑"), &DemoTools, &MockProvider).unwrap();
+        assert_eq!(s, "rejected", "放行后重跑仍不过，回到第 1 轮打回");
+        let run = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(run.reject_count, 1, "仲裁放行应清零后再计第 1 轮");
+        assert!(run.note.unwrap().contains("仲裁放行"), "仲裁说明应留痕到 run.note");
+    }
+
+    #[test]
+    fn arbitrate_fail_marks_run_failed() {
+        let c = db::open_in_memory().unwrap();
+        install_reject_sop(&c);
+        let run_id = start_run(&c, "sop-reject", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        retry_rejected(&c, &run_id, &DemoTools, &MockProvider).unwrap(); // → 打回两轮待仲裁
+        let s = arbitrate(&c, &run_id, "fail", Some("证据不足判失败"), &DemoTools, &MockProvider).unwrap();
+        assert_eq!(s, "failed");
+        let run = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(run.status, "failed");
+        assert_eq!(run.verdict.as_deref(), Some("fail"));
+        assert!(run.note.unwrap().contains("证据不足判失败"));
+    }
+
+    #[test]
+    fn arbitrate_rejects_illegal_state_and_decision() {
+        let c = db::open_in_memory().unwrap();
+        install_reject_sop(&c);
+        let run_id = start_run(&c, "sop-reject", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        assert_eq!(store::get_run(&c, &run_id).unwrap().status, "rejected");
+        // 非 review 状态不可仲裁
+        assert!(arbitrate(&c, &run_id, "resume", None, &DemoTools, &MockProvider).is_err());
+        // review 状态下非法决定被拒
+        retry_rejected(&c, &run_id, &DemoTools, &MockProvider).unwrap(); // → review
+        assert!(arbitrate(&c, &run_id, "bogus", None, &DemoTools, &MockProvider).is_err());
+    }
+
+    #[test]
+    fn high_risk_tool_still_gated_on_retry() {
+        // 资金/不可逆动作不因打回重试自动放行：把 demo 工具设为 high，
+        // 第一次跑停在人工门（wait_human），不会自动进入验收打回。
+        let c = db::open_in_memory().unwrap();
+        install_reject_sop(&c);
+        c.execute("UPDATE tools SET risk='high' WHERE id='demo:check_anomalies'", []).unwrap();
+        let run_id = start_run(&c, "sop-reject", "build", "manual", &json!({}), &DemoTools, &MockProvider).unwrap();
+        let s = store::get_run(&c, &run_id).unwrap().status;
+        assert_eq!(s, "wait_human", "高风险工具必须停人工门，不得因打回机制绕过");
     }
 }

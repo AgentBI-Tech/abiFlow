@@ -45,6 +45,8 @@ pub struct RunRow {
     pub current_node: Option<String>,
     pub outputs_json: String,
     pub branch_skipped: String,
+    /// 验收打回次数：0 未打回；1 已打回一次（可重试）；>=2 转 review 人工仲裁。
+    pub reject_count: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +192,15 @@ pub struct RunStartPayload {
 pub struct RunControlPayload {
     pub run_id: String,
     pub action: String,
+}
+
+/// 人工仲裁（验收打回两轮后 review 状态）：resume 放行重跑 / fail 判失败。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunArbitratePayload {
+    pub run_id: String,
+    pub decision: String,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

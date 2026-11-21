@@ -5,7 +5,8 @@ use crate::models::{AppError, AppResult};
 const MIGRATION_V1: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_V3: &str = include_str!("../../migrations/003_experience.sql");
 const MIGRATION_V4: &str = include_str!("../../migrations/004_owner_delegation.sql");
-const SCHEMA_VERSION: i64 = 5;
+const MIGRATION_V6: &str = include_str!("../../migrations/006_reject_count.sql");
+const SCHEMA_VERSION: i64 = 6;
 
 /// v2 要新增的列（table, column, ALTER 语句）。逐列按存在性执行，保证幂等。
 const V2_COLUMNS: &[(&str, &str, &str)] = &[
@@ -78,6 +79,20 @@ fn migrate(conn: &Connection) -> AppResult<()> {
     }
     conn.execute(
         "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (5, CAST(strftime('%s','now') AS INTEGER))",
+        [],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    // v6: runs.reject_count（验收打回次数）。SQLite ALTER 无 IF NOT EXISTS，按列存在性守卫保证幂等重放。
+    let _ = MIGRATION_V6; // 文档性 include，实际 ALTER 在下方按列守卫执行
+    if !column_exists(conn, "runs", "reject_count")? {
+        conn.execute(
+            "ALTER TABLE runs ADD COLUMN reject_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| AppError::Db(format!("迁移 v6 失败（reject_count）：{}", e)))?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (6, CAST(strftime('%s','now') AS INTEGER))",
         [],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
@@ -179,7 +194,18 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
             .expect("查版本");
-        assert_eq!(v, 5, "schema 版本应为 5");
+        assert_eq!(v, 6, "schema 版本应为 6");
+    }
+
+    /// v6：runs.reject_count 列存在（验收打回计数）。
+    #[test]
+    fn runs_reject_count_column_ready() {
+        let conn = open_in_memory().expect("迁移");
+        assert!(column_exists(&conn, "runs", "reject_count").expect("查列"), "缺 reject_count 列");
+        let v: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
+            .expect("查版本");
+        assert_eq!(v, 6, "schema 版本应为 6");
     }
 
     /// owner_decisions 表存在且字段齐全（v0.5 实际放权审计）。

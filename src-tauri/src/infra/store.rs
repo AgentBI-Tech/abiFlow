@@ -185,7 +185,7 @@ pub fn insert_run(
 pub fn get_run(conn: &Connection, id: &str) -> AppResult<RunRow> {
     conn.query_row(
         "SELECT id,sop_id,sop_version,status,mode,trigger_by,started_at,finished_at,verdict,note, \
-         definition_snapshot,current_node,outputs_json,branch_skipped FROM runs WHERE id=?1",
+         definition_snapshot,current_node,outputs_json,branch_skipped,reject_count FROM runs WHERE id=?1",
         params![id],
         |r| Ok(RunRow {
             id: r.get(0)?,
@@ -202,6 +202,7 @@ pub fn get_run(conn: &Connection, id: &str) -> AppResult<RunRow> {
             current_node: r.get(11)?,
             outputs_json: r.get(12)?,
             branch_skipped: r.get(13)?,
+            reject_count: r.get(14)?,
         }),
     )
     .optional()
@@ -217,7 +218,7 @@ pub fn list_runs(
 ) -> AppResult<Vec<RunRow>> {
     let mut sql = String::from(
         "SELECT id,sop_id,sop_version,status,mode,trigger_by,started_at,finished_at,verdict,note, \
-         definition_snapshot,current_node,outputs_json,branch_skipped FROM runs WHERE 1=1",
+         definition_snapshot,current_node,outputs_json,branch_skipped,reject_count FROM runs WHERE 1=1",
     );
     let sop_owned = sop_id.map(|s| s.to_string());
     let status_owned = status.map(|s| s.to_string());
@@ -251,6 +252,7 @@ pub fn list_runs(
                 current_node: r.get(11)?,
                 outputs_json: r.get(12)?,
                 branch_skipped: r.get(13)?,
+                reject_count: r.get(14)?,
             })
         })
         .map_err(|e| AppError::Db(e.to_string()))?;
@@ -275,6 +277,47 @@ pub fn update_run_status(
         params![id, status, verdict, note, finished],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+/// 验收打回：reject_count +1，返回新值。用于「打回两轮→人工仲裁」。
+pub fn bump_reject_count(conn: &Connection, id: &str) -> AppResult<i32> {
+    conn.execute(
+        "UPDATE runs SET reject_count = reject_count + 1 WHERE id=?1",
+        params![id],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
+    let n: i32 = conn
+        .query_row("SELECT reject_count FROM runs WHERE id=?1", params![id], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(n)
+}
+
+/// 在 run.note 末尾追加一段留痕（不覆盖既有说明）。用于仲裁说明跨重试保留。
+pub fn append_run_note(conn: &Connection, id: &str, extra: &str) -> AppResult<()> {
+    let cur: Option<String> = conn
+        .query_row("SELECT note FROM runs WHERE id=?1", params![id], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let merged = match cur {
+        Some(s) if !s.is_empty() => format!("{}；{}", s, extra),
+        _ => extra.to_string(),
+    };
+    conn.execute("UPDATE runs SET note=?2 WHERE id=?1", params![id, merged])
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+/// 仲裁恢复：清零本轮打回计数。
+pub fn reset_reject_count(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute("UPDATE runs SET reject_count = 0 WHERE id=?1", params![id])
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    Ok(())
+}
+
+/// 重试前清空该 run 的验收记录，避免上一轮失败行让最终结果永远 partial。
+pub fn clear_acceptance(conn: &Connection, run_id: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM acceptance WHERE run_id=?1", params![run_id])
+        .map_err(|e| AppError::Db(e.to_string()))?;
     Ok(())
 }
 

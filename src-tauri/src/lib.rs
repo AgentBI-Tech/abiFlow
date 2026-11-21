@@ -72,6 +72,8 @@ pub fn run() {
             commands::execution::run_get,
             commands::execution::run_list,
             commands::execution::run_control,
+            commands::execution::run_retry,
+            commands::execution::run_arbitrate,
             commands::execution::gate_list,
             commands::execution::gate_decide,
             commands::execution::dashboard_get,
