@@ -12,6 +12,7 @@ use tauri::Manager;
 use crate::domain::keystore::{KeyStore, MemoryKeyStore};
 use crate::domain::llm::{self, LlmProvider};
 use crate::domain::scheduler;
+use crate::infra::app_config;
 use crate::infra::db;
 use crate::infra::events;
 use crate::infra::tool_engine::ToolEngine;
@@ -22,11 +23,15 @@ pub struct AppKeyStore(pub Arc<dyn KeyStore>);
 /// LLM Provider（默认 Mock；本机未装 Ollama，装好后改配置即可切换，核心不动）。
 pub struct AppLlm(pub Arc<dyn LlmProvider>);
 
-/// 从环境变量读 LLM 配置：ABI_LLM_PROVIDER=ollama + ABI_LLM_HOST + ABI_LLM_MODEL。
+/// LLM 配置：优先读 config.json（config_get/set 写入），环境变量覆盖；重启生效（AppLlm 在 setup 构建一次）。
 fn build_llm() -> Arc<dyn LlmProvider> {
-    let provider = std::env::var("ABI_LLM_PROVIDER").unwrap_or_default();
-    let host = std::env::var("ABI_LLM_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".into());
-    let model = std::env::var("ABI_LLM_MODEL").unwrap_or_else(|_| "qwen2.5:3b".into());
+    let cfg = |k: &str| app_config::config_value(k);
+    let provider = std::env::var("ABI_LLM_PROVIDER").ok()
+        .or_else(|| cfg("llm.provider")).unwrap_or_default();
+    let host = std::env::var("ABI_LLM_HOST").ok()
+        .or_else(|| cfg("llm.host")).unwrap_or_else(|| "http://127.0.0.1:11434".into());
+    let model = std::env::var("ABI_LLM_MODEL").ok()
+        .or_else(|| cfg("llm.model")).unwrap_or_else(|| "qwen2.5:3b".into());
     llm::from_config(&provider, &host, &model)
 }
 
@@ -37,6 +42,10 @@ pub fn run() {
             let handle = app.handle().clone();
             // 后端→前端事件推送：store 状态变更后 emit，前端只当刷新提示。
             events::init(handle.clone());
+            // 配置/MCP server 文件与 abi.db 同目录；须在 build_llm 之前注入。
+            if let Ok(dir) = handle.path().app_data_dir() {
+                app_config::set_data_dir(dir.join("abiflow"));
+            }
             let stop = Arc::new(AtomicBool::new(false));
             app.manage(SchedulerStop(stop.clone()));
             let ks: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
@@ -68,7 +77,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app::app_info,
             commands::execution::sop_list,
+            commands::execution::sop_get,
             commands::execution::sop_upsert,
+            commands::execution::config_get,
+            commands::execution::config_set,
+            commands::execution::mcp_server_list,
+            commands::execution::mcp_server_add,
+            commands::execution::mcp_server_remove,
             commands::execution::sop_set_enabled,
             commands::execution::schedule_set,
             commands::execution::run_start,

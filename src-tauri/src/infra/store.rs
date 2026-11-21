@@ -40,6 +40,24 @@ pub fn get_sop(conn: &Connection, id: &str) -> AppResult<SopRow> {
     .ok_or_else(|| AppError::NotFound(format!("SOP {}", id)))
 }
 
+/// SOP 版本历史：sops 表原地升版本（无历史行），故从 runs 的定义快照取曾跑过的版本。
+/// 返回 (version, definition_snapshot, started_at)，按版本升序。
+pub fn sop_versions(conn: &Connection, id: &str) -> AppResult<Vec<(i32, String, Option<i64>)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT sop_version, definition_snapshot, MAX(started_at) \
+             FROM runs WHERE sop_id=?1 AND definition_snapshot IS NOT NULL \
+             GROUP BY sop_version ORDER BY sop_version",
+        )
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map(params![id], |r| {
+            Ok((r.get::<_, i32>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?))
+        })
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| AppError::Db(e.to_string()))
+}
+
 pub fn list_sops(conn: &Connection, enabled_only: bool) -> AppResult<Vec<SopRow>> {
     let sql = if enabled_only {
         "SELECT id,name,version,trigger_json,risk,owner_policy,enabled,created_at,updated_at,definition \
@@ -911,6 +929,34 @@ pub fn tool_meta(conn: &Connection, tool_id: &str) -> AppResult<(String, String)
     .optional()
     .map_err(|e| AppError::Db(e.to_string()))?
     .ok_or_else(|| AppError::NotFound(format!("工具 {}", tool_id)))
+}
+
+#[cfg(test)]
+mod sop_version_tests {
+    use super::*;
+    use crate::infra::db;
+
+    #[test]
+    fn sop_versions_from_run_snapshots() {
+        let c = db::open_in_memory().unwrap();
+        let def = r#"{"version":1,"nodes":[],"edges":[]}"#;
+        // 建 SOP（v1），再建两条 run 快照（v1、v2），sop_versions 应返回两个版本。
+        c.execute(
+            "INSERT INTO sops(id,name,version,trigger_json,risk,owner_policy,enabled,created_at,updated_at,definition) \
+             VALUES('sv','版本测试',1,'{}','low','agent',1,0,0,?1)", params![def],
+        ).unwrap();
+        for v in [1i32, 2i32] {
+            c.execute(
+                "INSERT INTO runs(id,sop_id,sop_version,status,mode,trigger_by,started_at,definition_snapshot,outputs_json,branch_skipped) \
+                 VALUES(?1,'sv',?2,'done','build','manual',100,?3,'{}','[]')",
+                params![format!("sv-run-{}", v), v, def],
+            ).unwrap();
+        }
+        let versions = sop_versions(&c, "sv").unwrap();
+        assert_eq!(versions.len(), 2, "应有 v1/v2 两个历史快照");
+        assert_eq!(versions[0].0, 1);
+        assert_eq!(versions[1].0, 2);
+    }
 }
 
 #[cfg(test)]

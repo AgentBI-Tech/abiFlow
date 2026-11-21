@@ -11,6 +11,51 @@ pub struct AppInfo {
     pub table_count: usize,
 }
 
+// ---- 补齐 IPC（§3.1）：sop_get / config / mcp_server ----
+
+/// SOP 版本历史项：从 run 的定义快照取（sops 表原地升版本、无历史行）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SopVersion {
+    pub version: i32,
+    pub definition: serde_json::Value,
+    pub ran_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SopDetail {
+    pub sop: SopRow,
+    pub versions: Vec<SopVersion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigSetPayload {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerRow {
+    pub id: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerPayload {
+    pub id: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub note: String,
+}
+
 // ---- v0.2 执行闭环的数据传输对象（对齐实现设计 §2 / §3.1） ----
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -12,14 +12,15 @@ use crate::domain::template_reuse;
 use crate::domain::gateway::Mode;
 use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
-use crate::infra::{db, store, template_zip, tool_engine::ToolEngine};
+use crate::infra::{app_config, db, store, template_zip, tool_engine::ToolEngine};
 use crate::models::{
     now_secs, AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunArbitratePayload,
     RunControlPayload, RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
     SopRow, SopUpsertPayload, SopUpsertResult, ToolGrantRow, ToolGrantSetPayload, ToolRow,
     CredentialSetPayload, CredentialRef, CorrectionInput, CorrectionRow, EfficiencyReport,
     TemplateBundle, TemplateCreatePayload, TemplateRow, TemplateReusePayload, UpgradeApprovePayload, UpgradeCandidate,
-    OwnerDecisionRow, ToolDefPayload,
+    OwnerDecisionRow, ToolDefPayload, SopDetail, SopVersion, ConfigSetPayload,
+    McpServerPayload, McpServerRow,
 };
 
 pub(crate) fn db_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
@@ -55,6 +56,60 @@ pub fn sop_upsert(
     def.validate(&known)?;
     let (id, version) = store::upsert_sop(&conn, &payload)?;
     Ok(SopUpsertResult { id, version })
+}
+
+/// 取 SOP 定义 + 版本历史（历史来自 run 快照；sops 表原地升版本无历史行）。
+#[tauri::command]
+pub fn sop_get(app: tauri::AppHandle, id: String) -> AppResult<SopDetail> {
+    let conn = open_db(&app)?;
+    let sop = store::get_sop(&conn, &id)?;
+    let versions = store::sop_versions(&conn, &id)?
+        .into_iter()
+        .map(|(v, def_json, ran_at)| {
+            let definition = serde_json::from_str(&def_json).unwrap_or(serde_json::Value::Null);
+            SopVersion { version: v, definition, ran_at }
+        })
+        .collect();
+    Ok(SopDetail { sop, versions })
+}
+
+/// 应用配置（非敏感）；不返回密钥值（密钥只进密钥链）。
+#[tauri::command]
+pub fn config_get() -> AppResult<std::collections::BTreeMap<String, String>> {
+    app_config::config_get_all()
+}
+
+#[tauri::command]
+pub fn config_set(payload: ConfigSetPayload) -> AppResult<()> {
+    app_config::config_set(&payload.key, &payload.value)
+}
+
+/// MCP server 配置（为 MCP client 协议栈预备；当前只存配置，不真连 server）。
+#[tauri::command]
+pub fn mcp_server_list() -> AppResult<Vec<McpServerRow>> {
+    Ok(app_config::mcp_list()?
+        .into_iter()
+        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note })
+        .collect())
+}
+
+#[tauri::command]
+pub fn mcp_server_add(payload: McpServerPayload) -> AppResult<Vec<McpServerRow>> {
+    let server = app_config::McpServer {
+        id: payload.id, command: payload.command, args: payload.args, note: payload.note,
+    };
+    Ok(app_config::mcp_add(server)?
+        .into_iter()
+        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note })
+        .collect())
+}
+
+#[tauri::command]
+pub fn mcp_server_remove(id: String) -> AppResult<Vec<McpServerRow>> {
+    Ok(app_config::mcp_remove(&id)?
+        .into_iter()
+        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note })
+        .collect())
 }
 
 #[tauri::command]

@@ -20,7 +20,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { sopUpsert, type SopRow } from "../lib/ipc";
+import { sopGet, sopUpsert, type SopRow, type SopVersionInfo } from "../lib/ipc";
 
 type AstNode = { id: string; type: string; config?: Record<string, unknown> };
 type AstEdge = { from: string; to: string; when?: string };
@@ -168,6 +168,7 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
   const [saving, setSaving] = useState(false);
   const [selNode, setSelNode] = useState<string | null>(null);
   const [selEdge, setSelEdge] = useState<string | null>(null);
+  const [versions, setVersions] = useState<SopVersionInfo[]>([]);
 
   const initial = useMemo(() => {
     let def: AstDef;
@@ -201,6 +202,8 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
     setEdges(es);
     setSelNode(null); setSelEdge(null);
     setName(sop.name); setErr("");
+    // 版本历史（sop_get）：只读展示，可瞻仰"那次是哪版流程跑的"。
+    void sopGet(sop.id).then((d) => setVersions(d.versions)).catch(() => setVersions([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sop.id, sop.definition]);
 
@@ -342,6 +345,25 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
       <details>
         <summary>预览 definition（AST JSON）</summary>
         <pre data-testid="ast-preview">{JSON.stringify(flowToAst(nodes, edges, initial.version ?? 1), null, 2)}</pre>
+      </details>
+      <details data-testid="sop-versions">
+        <summary>版本历史（{versions.length} 次运行快照）</summary>
+        {versions.length === 0 ? (
+          <p className="empty">尚无运行快照（此 SOP 还没有 run 记录）。</p>
+        ) : (
+          <table className="info">
+            <thead><tr><th>版本</th><th>最近运行</th><th>节点数</th></tr></thead>
+            <tbody>
+              {versions.map((v) => (
+                <tr key={v.version}>
+                  <td>v{v.version}</td>
+                  <td>{v.ranAt ? new Date(v.ranAt * 1000).toLocaleString("zh-CN", { hour12: false }) : "—"}</td>
+                  <td>{Array.isArray(v.definition?.nodes) ? (v.definition.nodes as unknown[]).length : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </details>
     </div>
   );

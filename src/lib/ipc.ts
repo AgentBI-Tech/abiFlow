@@ -353,6 +353,29 @@ export function delegationDemoInstall(): Promise<string> {
 export function llmStatus(): Promise<{ name: string; mock: boolean }> {
   return invoke("llm_status");
 }
+
+// ---- 补齐 IPC（§3.1）：sop_get / config / mcp_server ----
+export type SopVersionInfo = { version: number; definition: Record<string, unknown>; ranAt: number | null };
+export type SopDetail = { sop: SopRow; versions: SopVersionInfo[] };
+export function sopGet(id: string): Promise<SopDetail> {
+  return invoke("sop_get", { id });
+}
+export function configGet(): Promise<Record<string, string>> {
+  return invoke("config_get");
+}
+export function configSet(key: string, value: string): Promise<void> {
+  return invoke("config_set", { payload: { key, value } });
+}
+export type McpServerInfo = { id: string; command: string; args: string[]; note: string };
+export function mcpServerList(): Promise<McpServerInfo[]> {
+  return invoke("mcp_server_list");
+}
+export function mcpServerAdd(s: McpServerInfo): Promise<McpServerInfo[]> {
+  return invoke("mcp_server_add", { payload: s });
+}
+export function mcpServerRemove(id: string): Promise<McpServerInfo[]> {
+  return invoke("mcp_server_remove", { id });
+}
 export function sopParseText(text: string): Promise<Record<string, unknown>> {
   return invoke("sop_parse_text", { text });
 }

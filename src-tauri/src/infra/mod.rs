@@ -1,3 +1,4 @@
+pub mod app_config;
 pub mod db;
 pub mod events;
 pub mod store;

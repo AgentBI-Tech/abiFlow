@@ -4,6 +4,7 @@ import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
 import LlmPanel from "./components/LlmPanel";
+import ConfigPanel from "./components/ConfigPanel";
 import SopCanvas from "./components/SopCanvas";
 import SopEditor from "./components/SopEditor";
 import {
@@ -43,7 +44,7 @@ export default function App() {
   const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm">("board");
+  const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config">("board");
   const [selCanvasSop, setSelCanvasSop] = useState("");
   const [canvasMode, setCanvasMode] = useState<"read" | "edit">("edit");
   const [cronDraft, setCronDraft] = useState<Record<string, string>>({});
@@ -107,6 +108,7 @@ export default function App() {
           <button className={tab === "custom" ? "tab on" : "tab"} onClick={() => setTab("custom")}>自定义工具</button>
           <button className={tab === "experience" ? "tab on" : "tab"} onClick={() => setTab("experience")}>经验沉淀</button>
           <button className={tab === "llm" ? "tab on" : "tab"} onClick={() => setTab("llm")}>AI / 建 SOP</button>
+          <button className={tab === "config" ? "tab on" : "tab"} onClick={() => setTab("config")}>配置 / MCP</button>
         </div>
       </header>
 
@@ -146,6 +148,8 @@ export default function App() {
         <ExperiencePanel onError={setErr} />
       ) : tab === "llm" ? (
         <LlmPanel onError={setErr} />
+      ) : tab === "config" ? (
+        <ConfigPanel onError={setErr} />
       ) : (
       <>
       <section className="actions">
