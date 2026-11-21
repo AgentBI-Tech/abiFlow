@@ -4,6 +4,7 @@ import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
 import LlmPanel from "./components/LlmPanel";
 import SopCanvas from "./components/SopCanvas";
+import SopEditor from "./components/SopEditor";
 import {
   dashboardGet,
   demoInstall,
@@ -43,6 +44,7 @@ export default function App() {
   const [err, setErr] = useState("");
   const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm">("board");
   const [selCanvasSop, setSelCanvasSop] = useState("");
+  const [canvasMode, setCanvasMode] = useState<"read" | "edit">("edit");
   const [cronDraft, setCronDraft] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
@@ -105,11 +107,16 @@ export default function App() {
                   <option key={s.id} value={s.id}>{s.name} · v{s.version}</option>
                 ))}
               </select>
+              <button className={canvasMode === "edit" ? "tab on" : "tab"} onClick={() => setCanvasMode("edit")}>编辑</button>
+              <button className={canvasMode === "read" ? "tab on" : "tab"} onClick={() => setCanvasMode("read")}>只读</button>
             </section>
             {selCanvasSop ? (
               (() => {
                 const sop = data.sops.find((s) => s.id === selCanvasSop);
-                return sop ? <SopCanvas sop={sop} /> : <p className="empty">SOP 不存在。</p>;
+                if (!sop) return <p className="empty">SOP 不存在。</p>;
+                return canvasMode === "edit"
+                  ? <SopEditor sop={sop} onSaved={refresh} />
+                  : <SopCanvas sop={sop} />;
               })()
             ) : (
               <p className="empty">先选一条 SOP。还没有 SOP 的话，去「运营看板」点「安装演示 SOP」。</p>
