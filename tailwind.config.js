@@ -17,7 +17,7 @@ export default {
           100: "#e2e8f0", // 主文字（浅）
         },
         brand: {
-          DEFAULT: "#14b8a6", // teal 主色
+          DEFAULT: "#14b8a6", // teal 主色（用户试蓝后决定退回绿色系）
           deep: "#0d9488",
           soft: "rgba(20,184,166,0.12)",
         },

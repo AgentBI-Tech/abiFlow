@@ -10,6 +10,7 @@ import LlmPanel from "./components/LlmPanel";
 import ConfigPanel from "./components/ConfigPanel";
 import SopCanvas from "./components/SopCanvas";
 import SopEditor from "./components/SopEditor";
+import abiLogo from "./assets/abilogo.svg";
 import {
   dashboardGet,
   demoInstall,
@@ -115,7 +116,7 @@ export default function App() {
       {/* 顶部导航 bar：logo + 产品名 + 全局状态 */}
       <header className="app-topbar">
         <div className="app-brand">
-          <span className="app-brand-mark" aria-hidden="true">◈</span>
+          <span className="app-brand-mark" aria-hidden="true"><img src={abiLogo} alt="" /></span>
           <span className="app-brand-name">abiFlow</span>
           <span className="app-brand-sub">人机协同电商运营工作台</span>
         </div>
