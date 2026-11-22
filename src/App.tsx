@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import {
+  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn,
+} from "lucide-react";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
@@ -31,6 +34,17 @@ const STATUS_ZH: Record<string, string> = {
   review: "待仲裁", done: "完成", failed: "失败", cancelled: "已取消",
 };
 const VERDICT_ZH: Record<string, string> = { pass: "通过", fail: "未通过", partial: "部分" };
+
+// 侧栏导航项：icon 用 lucide，key 与 tab state 一致。
+const NAV_ITEMS = [
+  { key: "board", label: "运营看板", icon: LayoutDashboard },
+  { key: "canvas", label: "SOP 画布", icon: Workflow },
+  { key: "tools", label: "工具与权限", icon: Wrench },
+  { key: "custom", label: "自定义工具", icon: Puzzle },
+  { key: "experience", label: "经验沉淀", icon: BookOpen },
+  { key: "llm", label: "AI / 建 SOP", icon: Sparkles },
+  { key: "config", label: "配置 / MCP", icon: Settings2 },
+] as const;
 
 function fmtTime(ts: number | null): string {
   if (!ts) return "—";
@@ -97,22 +111,50 @@ export default function App() {
   }
 
   return (
-    <main className="wrap" data-app="abiflow">
-      <header>
-        <h1>abiFlow</h1>
-        <p className="sub">人机协同电商运营工作台 · 通用工具（工具即数据，agentbi.tech 为首个示例）</p>
-        <div className="tabs">
-          <button className={tab === "board" ? "tab on" : "tab"} onClick={() => setTab("board")}>运营看板</button>
-          <button className={tab === "canvas" ? "tab on" : "tab"} onClick={() => setTab("canvas")}>SOP 画布</button>
-          <button className={tab === "tools" ? "tab on" : "tab"} onClick={() => setTab("tools")}>工具与权限</button>
-          <button className={tab === "custom" ? "tab on" : "tab"} onClick={() => setTab("custom")}>自定义工具</button>
-          <button className={tab === "experience" ? "tab on" : "tab"} onClick={() => setTab("experience")}>经验沉淀</button>
-          <button className={tab === "llm" ? "tab on" : "tab"} onClick={() => setTab("llm")}>AI / 建 SOP</button>
-          <button className={tab === "config" ? "tab on" : "tab"} onClick={() => setTab("config")}>配置 / MCP</button>
+    <div className="app-root" data-app="abiflow">
+      {/* 顶部导航 bar：logo + 产品名 + 全局状态 */}
+      <header className="app-topbar">
+        <div className="app-brand">
+          <span className="app-brand-mark" aria-hidden="true">◈</span>
+          <span className="app-brand-name">abiFlow</span>
+          <span className="app-brand-sub">人机协同电商运营工作台</span>
+        </div>
+        <div className="app-topbar-right">
+          <span className="app-topbar-tag">工具即数据</span>
+          <span className="app-topbar-tag">agentbi.tech</span>
         </div>
       </header>
 
-      {err && <p className="err" data-testid="error">{err}</p>}
+      <div className="app-shell">
+        {/* 左侧功能区（固定宽度），底部用户占位 */}
+        <aside className="app-sidebar">
+          <nav className="app-nav" aria-label="功能区">
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  className={tab === item.key ? "app-nav-item on" : "app-nav-item"}
+                  onClick={() => setTab(item.key)}
+                >
+                  <Icon size={16} strokeWidth={1.8} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="app-user">
+            <span className="app-user-avatar" aria-hidden="true">👤</span>
+            <span className="app-user-label">未登录</span>
+            <button className="app-user-login" onClick={() => setErr("用户登录将在后续版本接入")}>
+              <LogIn size={13} /> 登录
+            </button>
+          </div>
+        </aside>
+
+        {/* 右侧浅色内容区（随窗口缩放） */}
+        <main className="app-content">
+          {err && <p className="err" data-testid="error">{err}</p>}
 
       {tab === "canvas" ? (
         !data ? <p>加载中…</p> : (
@@ -415,6 +457,8 @@ export default function App() {
       )}
       </>
       )}
-    </main>
+        </main>
+      </div>
+    </div>
   );
 }
