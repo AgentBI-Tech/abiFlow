@@ -32,7 +32,9 @@ fn build_llm() -> Arc<dyn LlmProvider> {
         .or_else(|| cfg("llm.host")).unwrap_or_else(|| "http://127.0.0.1:11434".into());
     let model = std::env::var("ABI_LLM_MODEL").ok()
         .or_else(|| cfg("llm.model")).unwrap_or_else(|| "qwen2.5:3b".into());
-    llm::from_config(&provider, &host, &model)
+    // API key 只从 env/llm.env 读，不进 config.json（config_set 已拒绝密钥类键名）。
+    let api_key = std::env::var("ABI_LLM_API_KEY").ok().unwrap_or_default();
+    llm::from_config(&provider, &host, &model, &api_key)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -46,6 +48,8 @@ pub fn run() {
             if let Ok(dir) = handle.path().app_data_dir() {
                 app_config::set_data_dir(dir.join("abiflow"));
             }
+            // LLM env 文件：在 build_llm 之前加载（键只从进程环境读，值不进 config.json/代码）。
+            app_config::load_llm_env();
             let stop = Arc::new(AtomicBool::new(false));
             app.manage(SchedulerStop(stop.clone()));
             let ks: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());

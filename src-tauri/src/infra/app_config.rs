@@ -67,6 +67,24 @@ pub fn set_data_dir(p: PathBuf) {
 
 fn config_path() -> AppResult<PathBuf> { Ok(dir()?.join("config.json")) }
 fn mcp_path() -> AppResult<PathBuf> { Ok(dir()?.join("mcp_servers.json")) }
+fn llm_env_path() -> AppResult<PathBuf> { Ok(dir()?.join("llm.env")) }
+
+/// 把 <data_dir>/llm.env 里的键注入进程环境（给 build_llm 读）。
+/// 文件不存在不算错（首次启动/只用 Mock 时没有它）；已存在的真实 env 变量不被覆盖。
+/// 只读键名/路径，绝不回显值。
+pub fn load_llm_env() {
+    if let Ok(path) = llm_env_path() {
+        if path.exists() {
+            // from_path 不覆盖已设置的变量 → shell 里 export 的真值优先于文件。
+            let _ = dotenvy::from_path(&path);
+        }
+    }
+}
+
+/// env 文件路径（给 UI/日志展示用，仅路径不含值）。
+pub fn llm_env_path_display() -> String {
+    llm_env_path().map(|p| p.display().to_string()).unwrap_or_default()
+}
 
 fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> AppResult<T> {
     match std::fs::read_to_string(path) {

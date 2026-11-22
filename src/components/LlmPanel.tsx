@@ -56,9 +56,15 @@ export default function LlmPanel({ onError }: { onError: (s: string) => void }) 
           </dl>
         )}
         <p className="sub-row">
-          本机未装 Ollama，默认 Mock（输出标注 mock）。装好 Ollama + 模型后，
-          设环境变量 ABI_LLM_PROVIDER=ollama、ABI_LLM_HOST=http://127.0.0.1:11434、
-          ABI_LLM_MODEL=qwen2.5:3b，重启即可切真模型，核心代码不动。
+          默认 Mock（输出标注 mock）。可切两类真模型，核心代码不动：
+          ① 本地 Ollama：ABI_LLM_PROVIDER=ollama、ABI_LLM_HOST=http://127.0.0.1:11434、ABI_LLM_MODEL=qwen2.5:3b；
+          ② 云 API（OpenAI 兼容，如智谱 GLM）：ABI_LLM_PROVIDER=openai-compatible、
+          ABI_LLM_HOST=https://open.bigmodel.cn/api/paas/v4、ABI_LLM_MODEL=glm-4.7-flash、
+          ABI_LLM_API_KEY=你的key。
+        </p>
+        <p className="sub-row">
+          云 API 的 key 只从 env 读、不进 config.json，也不显示在本界面；
+          把它写进配置目录下的 llm.env（权限 600），重启生效。切厂商只需改 host/model/key。
         </p>
       </section>
 

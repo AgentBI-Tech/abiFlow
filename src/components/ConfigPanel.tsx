@@ -61,12 +61,12 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
     <div className="stack" data-testid="config-panel">
       <section className="card">
         <h2>应用配置</h2>
-        <p className="sub-row">非敏感配置；密钥只进密钥链，不在此显示或保存。LLM 配置改后需重启生效。</p>
+        <p className="sub-row">非敏感配置；密钥只进密钥链/llm.env，不在此显示或保存。LLM 配置改后需重启生效；云 API 的 ABI_LLM_API_KEY 只写到 llm.env。</p>
         {llmKeys.map((k) => (
           <label className="stack" key={k}>{k}
             <input
               value={draft[k] ?? ""}
-              placeholder={k === "llm.host" ? "http://127.0.0.1:11434" : k === "llm.model" ? "qwen2.5:3b" : "ollama / 留空=Mock"}
+              placeholder={k === "llm.host" ? "http://127.0.0.1:11434 或 https://open.bigmodel.cn/api/paas/v4" : k === "llm.model" ? "qwen2.5:3b 或 glm-4.7-flash" : "ollama / openai-compatible / 留空=Mock"}
               onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
             />
           </label>
