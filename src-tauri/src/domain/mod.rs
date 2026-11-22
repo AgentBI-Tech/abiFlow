@@ -3,6 +3,7 @@ pub mod audit;
 pub mod board;
 pub mod circuit_breaker;
 pub mod cron;
+pub mod event_bus;
 pub mod examples;
 pub mod executor;
 pub mod experience;

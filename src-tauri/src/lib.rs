@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use tauri::Manager;
 
+use crate::domain::event_bus::{EventSource, InMemoryEventSource};
 use crate::domain::keystore::{KeyStore, MemoryKeyStore};
 use crate::domain::llm::{self, LlmProvider};
 use crate::domain::scheduler;
@@ -22,6 +23,8 @@ struct SchedulerStop(Arc<AtomicBool>);
 pub struct AppKeyStore(pub Arc<dyn KeyStore>);
 /// LLM Provider（默认 Mock；本机未装 Ollama，装好后改配置即可切换，核心不动）。
 pub struct AppLlm(pub Arc<dyn LlmProvider>);
+/// 事件源（可插拔；当前进程内假事件源，供事件订阅触发用）。
+pub struct AppEventSource(pub Arc<dyn EventSource>);
 
 /// LLM 配置：优先读 config.json（config_get/set 写入），环境变量覆盖；重启生效（AppLlm 在 setup 构建一次）。
 fn build_llm() -> Arc<dyn LlmProvider> {
@@ -56,6 +59,8 @@ pub fn run() {
             app.manage(AppKeyStore(ks.clone()));
             let llm: Arc<dyn LlmProvider> = build_llm();
             app.manage(AppLlm(llm.clone()));
+            let events: Arc<dyn EventSource> = Arc::new(InMemoryEventSource::new());
+            app.manage(AppEventSource(events.clone()));
             let engine = ToolEngine::new(ks);
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(30));
@@ -65,7 +70,7 @@ pub fn run() {
                 if let Ok(dir) = handle.path().app_data_dir() {
                     let path = dir.join("abiflow").join("abi.db");
                     if let Ok(conn) = db::open(&path) {
-                        let _ = scheduler::tick(&conn, &engine, llm.as_ref());
+                        let _ = scheduler::tick(&conn, events.as_ref(), &engine, llm.as_ref());
                     }
                 }
             });
@@ -100,6 +105,7 @@ pub fn run() {
             commands::execution::gate_decide,
             commands::execution::dashboard_get,
             commands::execution::scheduler_tick,
+            commands::execution::emit_event,
             commands::execution::demo_install,
             commands::execution::tool_list,
             commands::execution::tool_grant_list,

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde_json::json;
 use tauri::Manager;
 
+use crate::AppEventSource;
 use crate::AppKeyStore;
 use crate::AppLlm;
 use crate::domain::executor::{self};
@@ -278,10 +279,23 @@ pub fn dashboard_get(app: tauri::AppHandle) -> AppResult<DashboardData> {
 }
 
 #[tauri::command]
-pub fn scheduler_tick(app: tauri::AppHandle, ks: tauri::State<'_, AppKeyStore>, llmst: tauri::State<'_, AppLlm>) -> AppResult<SchedulerTickResult> {
+pub fn scheduler_tick(app: tauri::AppHandle, ks: tauri::State<'_, AppKeyStore>, llmst: tauri::State<'_, AppLlm>, ev: tauri::State<'_, AppEventSource>) -> AppResult<SchedulerTickResult> {
     let conn = open_db(&app)?;
     let engine = ToolEngine::new(ks.0.clone());
-    scheduler::tick(&conn, &engine, llmst.0.as_ref())
+    scheduler::tick(&conn, ev.0.as_ref(), &engine, llmst.0.as_ref())
+}
+
+/// 注入一个假事件到进程内事件源（事件订阅触发的测试/演示入口）。
+/// 真事件源（MCP/webhook）以后替换实现即可，命令层不变。
+#[tauri::command]
+pub fn emit_event(ev: tauri::State<'_, AppEventSource>, event_type: String, payload_json: Option<String>) -> AppResult<()> {
+    let payload = match payload_json {
+        Some(s) if !s.trim().is_empty() => serde_json::from_str(&s)
+            .map_err(|e| AppError::InvalidInput(format!("payload_json 非法：{}", e)))?,
+        _ => json!({}),
+    };
+    ev.0.emit(&event_type, payload);
+    Ok(())
 }
 
 #[tauri::command]

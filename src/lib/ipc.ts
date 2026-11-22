@@ -245,6 +245,10 @@ export function gateDecide(gateId: string, decision: string, note?: string): Pro
 export function schedulerTick(): Promise<SchedulerTickResult> {
   return invoke("scheduler_tick");
 }
+/// 注入假事件（事件订阅触发的演示入口）；下一次 scheduler tick 消费。
+export function emitEvent(eventType: string, payloadJson?: string): Promise<void> {
+  return invoke("emit_event", { eventType, payloadJson: payloadJson ?? null });
+}
 export function scheduleSet(sopId: string, enabled: boolean, intervalSecs: number, cronExpr?: string | null): Promise<void> {
   return invoke("schedule_set", { payload: { sopId, enabled, intervalSecs, cronExpr: cronExpr ?? null } });
 }
