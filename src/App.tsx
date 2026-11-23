@@ -8,10 +8,12 @@ import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
 import LlmPanel from "./components/LlmPanel";
 import ConfigPanel from "./components/ConfigPanel";
+import { applyTheme, currentTheme, themeFromBackend } from "./lib/theme";
 import SopCanvas from "./components/SopCanvas";
 import SopEditor from "./components/SopEditor";
 import abiLogo from "./assets/abilogo.svg";
 import {
+  configGet,
   dashboardGet,
   demoInstall,
   errMessage,
@@ -74,6 +76,18 @@ export default function App() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // 后端 config 的 theme 是跨重启/机器权威：挂载后用它校正首屏的 localStorage 值。
+  // 后端无值则保留首屏选择（首次启动时由 saveTheme 写入后端）。
+  useEffect(() => {
+    void configGet().then((cfg) => {
+      const t = themeFromBackend(cfg);
+      if (t && t !== currentTheme()) {
+        applyTheme(t);
+        localStorage.setItem("abiflow.theme", t);
+      }
+    }).catch(() => { /* 非 Tauri 环境无 config，保留首屏主题 */ });
+  }, []);
 
   // 后端状态变更事件只当「该刷新了」的提示；真相仍以 dashboardGet / run_get 拉取为准。
   useEffect(() => {

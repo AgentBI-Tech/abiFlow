@@ -8,6 +8,7 @@ import {
   errMessage,
   type McpServerInfo,
 } from "../lib/ipc";
+import { currentTheme, saveTheme, type Theme } from "../lib/theme";
 
 export default function ConfigPanel({ onError }: { onError: (s: string) => void }) {
   const [cfg, setCfg] = useState<Record<string, string>>({});
@@ -15,6 +16,14 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [newSrv, setNewSrv] = useState<McpServerInfo>({ id: "", command: "", args: [], note: "", transport: "stdio", url: "" });
   const [busy, setBusy] = useState("");
+  const [theme, setTheme] = useState<Theme>(currentTheme());
+
+  const switchTheme = async (t: Theme) => {
+    if (t === theme) return;
+    setTheme(t);
+    try { await saveTheme(t, configSet); onError(""); }
+    catch (e) { onError(errMessage(e)); }  // DOM 已切、本地已存；后端写失败只提示
+  };
 
   const load = async () => {
     try {
@@ -59,6 +68,15 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
 
   return (
     <div className="stack" data-testid="config-panel">
+      <section className="card">
+        <h2>外观主题</h2>
+        <p className="sub-row">默认浅色。切换立即生效并记住选择（重启后保持）。</p>
+        <div className="row actions" data-testid="theme-switch">
+          <button data-active={theme === "light"} onClick={() => switchTheme("light")}>☀ 浅色</button>
+          <button data-active={theme === "dark"} onClick={() => switchTheme("dark")}>☾ 深色</button>
+        </div>
+      </section>
+
       <section className="card">
         <h2>应用配置</h2>
         <p className="sub-row">非敏感配置；密钥只进密钥链/llm.env，不在此显示或保存。LLM 配置改后需重启生效；云 API 的 ABI_LLM_API_KEY 只写到 llm.env。</p>
