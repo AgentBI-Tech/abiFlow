@@ -15,3 +15,4 @@ pub mod mcp;
 pub mod reviewer;
 pub mod scheduler;
 pub mod sop;
+pub mod user;

@@ -24,6 +24,9 @@ thiserror = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ureq = "2"
 chrono = { version = "0.4.45", features = ["clock"] }
+# 用户密码 salted hash（存 users 表，明文不落盘/不进日志）。
+sha2 = "0.10"
+getrandom = "0.3"
 # 启动时从 <app_data_dir>/abiflow/llm.env 加载 LLM 配置；密钥只从 env 读、不进 config.json/代码。
 dotenvy = "0.15"
 

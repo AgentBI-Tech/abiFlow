@@ -6,7 +6,8 @@ const MIGRATION_V1: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_V3: &str = include_str!("../../migrations/003_experience.sql");
 const MIGRATION_V4: &str = include_str!("../../migrations/004_owner_delegation.sql");
 const MIGRATION_V6: &str = include_str!("../../migrations/006_reject_count.sql");
-const SCHEMA_VERSION: i64 = 6;
+const MIGRATION_V7: &str = include_str!("../../migrations/007_users.sql");
+const SCHEMA_VERSION: i64 = 7;
 
 /// v2 要新增的列（table, column, ALTER 语句）。逐列按存在性执行，保证幂等。
 const V2_COLUMNS: &[(&str, &str, &str)] = &[
@@ -96,6 +97,14 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         [],
     )
     .map_err(|e| AppError::Db(e.to_string()))?;
+    // v7: users 表（全 IF NOT EXISTS，可直接重放）。
+    conn.execute_batch(MIGRATION_V7)
+        .map_err(|e| AppError::Db(format!("迁移 v7 失败：{}", e)))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(version, applied_at) VALUES (7, CAST(strftime('%s','now') AS INTEGER))",
+        [],
+    )
+    .map_err(|e| AppError::Db(e.to_string()))?;
     let v: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
         .map_err(|e| AppError::Db(e.to_string()))?;
@@ -138,8 +147,8 @@ mod tests {
     fn migration_creates_all_tables() {
         let conn = open_in_memory().expect("内存库迁移应成功");
         let n = user_table_count(&conn).expect("统计应成功");
-        // 14 张业务表（含 schema_meta）
-        assert_eq!(n, 14, "应建 14 张表，实得 {}", n);
+        // 15 张业务表（含 schema_meta + v7 users）
+        assert_eq!(n, 15, "应建 15 张表，实得 {}", n);
     }
 
     #[test]
@@ -154,8 +163,9 @@ mod tests {
         }
         conn.execute_batch(MIGRATION_V3).expect("重放迁移 v3 应成功");
         conn.execute_batch(MIGRATION_V4).expect("重放迁移 v4 应成功");
+        conn.execute_batch(MIGRATION_V7).expect("重放迁移 v7 应成功");
         let n = user_table_count(&conn).expect("统计应成功");
-        assert_eq!(n, 14);
+        assert_eq!(n, 15);
     }
 
     #[test]
@@ -183,7 +193,7 @@ mod tests {
         assert!(!nested.parent().unwrap().exists(), "父目录起初不应存在");
         let conn = open(&nested).expect("open 应创建父目录并建表");
         assert!(nested.exists(), "db 文件应生成");
-        assert_eq!(user_table_count(&conn).expect("统计"), 14);
+        assert_eq!(user_table_count(&conn).expect("统计"), 15);
     }
 
     /// v5：schedules.cron_expr 列存在（NULL = interval 模式）。
@@ -194,7 +204,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
             .expect("查版本");
-        assert_eq!(v, 6, "schema 版本应为 6");
+        assert_eq!(v, 7, "schema 版本应为 7");
     }
 
     /// v6：runs.reject_count 列存在（验收打回计数）。
@@ -205,7 +215,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))
             .expect("查版本");
-        assert_eq!(v, 6, "schema 版本应为 6");
+        assert_eq!(v, 7, "schema 版本应为 7");
     }
 
     /// owner_decisions 表存在且字段齐全（v0.5 实际放权审计）。

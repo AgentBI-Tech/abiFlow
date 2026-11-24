@@ -12,12 +12,12 @@ import {
   type ToolRow,
 } from "../lib/ipc";
 
-const ROLES = ["agent", "content", "ops", "admin"];
 const MODES = ["plan", "build", "review"];
 const PLANES = ["public", "content", "cost", "ops", "finance"];
 
-export default function ToolsPanel({ onError }: { onError: (s: string) => void }) {
-  const [role, setRole] = useState("agent");
+export default function ToolsPanel({ onError, role: roleProp }: { onError: (s: string) => void; role?: string }) {
+  // 角色由登录用户决定（未登录回退 agent）；不再允许在此手动切换，避免与权限体系脱节。
+  const role = roleProp ?? "agent";
   const [mode, setMode] = useState("build");
   const [tools, setTools] = useState<ToolRow[]>([]);
   const [grants, setGrants] = useState<ToolGrantRow[]>([]);
@@ -56,11 +56,7 @@ export default function ToolsPanel({ onError }: { onError: (s: string) => void }
       <section className="card">
         <h2>工具注册表</h2>
         <div className="row">
-          <label>角色
-            <select value={role} onChange={(e) => setRole(e.target.value)}>
-              {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </label>
+          <span className="pill">角色：{role}（由登录用户决定，未登录为 agent）</span>
           <label>模式
             <select value={mode} onChange={(e) => setMode(e.target.value)}>
               {MODES.map((m) => <option key={m} value={m}>{m}</option>)}

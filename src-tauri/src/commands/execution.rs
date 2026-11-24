@@ -696,3 +696,55 @@ pub fn llm_status(llmst: tauri::State<'_, AppLlm>) -> serde_json::Value {
         "mock": llmst.0.is_mock(),
     })
 }
+
+// ---- 用户管理与权限（2026-11-24）----
+
+#[tauri::command]
+pub fn user_list(app: tauri::AppHandle) -> AppResult<Vec<crate::domain::user::UserRow>> {
+    let conn = open_db(&app)?;
+    crate::domain::user::list_users(&conn)
+}
+
+#[tauri::command]
+pub fn user_current() -> Option<crate::domain::user::CurrentUser> {
+    crate::domain::user::current_user()
+}
+
+#[tauri::command]
+pub fn user_add(
+    app: tauri::AppHandle,
+    username: String,
+    display_name: String,
+    role: String,
+    password: String,
+) -> AppResult<crate::domain::user::UserRow> {
+    let conn = open_db(&app)?;
+    crate::domain::user::create_user(&conn, &username, &display_name, &role, &password)
+}
+
+#[tauri::command]
+pub fn user_login(
+    app: tauri::AppHandle,
+    username: String,
+    password: String,
+) -> AppResult<crate::domain::user::CurrentUser> {
+    let conn = open_db(&app)?;
+    crate::domain::user::login(&conn, &username, &password)
+}
+
+#[tauri::command]
+pub fn user_logout() -> AppResult<()> {
+    crate::domain::user::clear_current_user()
+}
+
+#[tauri::command]
+pub fn user_set_role(app: tauri::AppHandle, user_id: String, role: String) -> AppResult<crate::domain::user::UserRow> {
+    let conn = open_db(&app)?;
+    crate::domain::user::set_role(&conn, &user_id, &role)
+}
+
+#[tauri::command]
+pub fn user_remove(app: tauri::AppHandle, user_id: String) -> AppResult<()> {
+    let conn = open_db(&app)?;
+    crate::domain::user::delete_user(&conn, &user_id)
+}

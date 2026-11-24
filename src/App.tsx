@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn,
+  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound,
 } from "lucide-react";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
 import CustomToolsPanel from "./components/CustomToolsPanel";
 import LlmPanel from "./components/LlmPanel";
 import ConfigPanel from "./components/ConfigPanel";
+import UserPanel from "./components/UserPanel";
 import { applyTheme, currentTheme, themeFromBackend } from "./lib/theme";
 import SopCanvas from "./components/SopCanvas";
 import SopEditor from "./components/SopEditor";
@@ -30,6 +31,7 @@ import {
   type DashboardData,
   type RunDetail,
   type RunRow,
+  type CurrentUser,
 } from "./lib/ipc";
 
 const STATUS_ZH: Record<string, string> = {
@@ -47,6 +49,7 @@ const NAV_ITEMS = [
   { key: "experience", label: "经验沉淀", icon: BookOpen },
   { key: "llm", label: "AI / 建 SOP", icon: Sparkles },
   { key: "config", label: "配置 / MCP", icon: Settings2 },
+  { key: "user", label: "用户与权限", icon: UserRound },
 ] as const;
 
 function fmtTime(ts: number | null): string {
@@ -61,7 +64,8 @@ export default function App() {
   const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config">("board");
+  const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config" | "user">("board");
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selCanvasSop, setSelCanvasSop] = useState("");
   const [canvasMode, setCanvasMode] = useState<"read" | "edit">("edit");
   const [cronDraft, setCronDraft] = useState<Record<string, string>>({});
@@ -160,9 +164,12 @@ export default function App() {
           </nav>
           <div className="app-user">
             <span className="app-user-avatar" aria-hidden="true">👤</span>
-            <span className="app-user-label">未登录</span>
-            <button className="app-user-login" onClick={() => setErr("用户登录将在后续版本接入")}>
-              <LogIn size={13} /> 登录
+            <span className="app-user-label" data-user-label="1" title={currentUser ? `${currentUser.displayName}（@${currentUser.username}）· ${currentUser.role}` : "未登录"}>
+              {currentUser ? `${currentUser.displayName} · ${currentUser.role}` : "未登录"}
+            </span>
+            <button className="app-user-login" onClick={() => setTab("user")} title="用户与权限">
+              {currentUser ? <UserRound size={13} /> : <LogIn size={13} />}
+              {currentUser ? "管理" : "登录"}
             </button>
           </div>
         </aside>
@@ -198,7 +205,9 @@ export default function App() {
           </>
         )
       ) : tab === "tools" ? (
-        <ToolsPanel onError={setErr} />
+        <ToolsPanel onError={setErr} role={currentUser?.role ?? "agent"} />
+      ) : tab === "user" ? (
+        <UserPanel onError={setErr} onUserChange={setCurrentUser} />
       ) : tab === "custom" ? (
         <CustomToolsPanel onError={setErr} />
       ) : tab === "experience" ? (

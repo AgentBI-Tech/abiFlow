@@ -384,6 +384,42 @@ export function sopParseText(text: string): Promise<Record<string, unknown>> {
   return invoke("sop_parse_text", { text });
 }
 
+// ---- 用户管理与权限（2026-11-24）----
+export type UserRow = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: string;
+  createdAt: number;
+};
+export type CurrentUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: string;
+};
+export function userList(): Promise<UserRow[]> {
+  return invoke("user_list");
+}
+export function userCurrent(): Promise<CurrentUser | null> {
+  return invoke("user_current");
+}
+export function userAdd(username: string, displayName: string, role: string, password: string): Promise<UserRow> {
+  return invoke("user_add", { payload: { username, displayName, role, password } });
+}
+export function userLogin(username: string, password: string): Promise<CurrentUser> {
+  return invoke("user_login", { payload: { username, password } });
+}
+export function userLogout(): Promise<void> {
+  return invoke("user_logout");
+}
+export function userSetRole(userId: string, role: string): Promise<UserRow> {
+  return invoke("user_set_role", { payload: { userId, role } });
+}
+export function userRemove(userId: string): Promise<void> {
+  return invoke("user_remove", { userId });
+}
+
 export function errMessage(e: unknown): string {
   if (typeof e === "object" && e !== null && "message" in e) {
     const err = e as AppError;

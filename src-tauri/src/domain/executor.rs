@@ -275,7 +275,13 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dy
                     }
                 }
                 let mode = Mode::parse(&run.mode)?;
-                let ctx = store::call_ctx(conn, run_id, Actor::agent(), mode, tool)?;
+                // 用户权限接入（2026-11-24）：run 按当前登录用户角色判定可见数据面/人工门；
+                // 未登录回退 agent，保持既有行为不变。
+                let actor = match crate::domain::user::current_user() {
+                    Some(u) => Actor::human(&u.id, &u.role),
+                    None => Actor::agent(),
+                };
+                let ctx = store::call_ctx(conn, run_id, actor, mode, tool)?;
                 let decision = gateway::authorize(&spec, &ctx);
                 match decision {
                     Decision::Deny => {

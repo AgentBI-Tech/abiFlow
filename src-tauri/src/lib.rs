@@ -133,6 +133,13 @@ pub fn run() {
             commands::execution::run_as_agent,
             commands::execution::sop_parse_text,
             commands::execution::llm_status,
+            commands::execution::user_list,
+            commands::execution::user_current,
+            commands::execution::user_add,
+            commands::execution::user_login,
+            commands::execution::user_logout,
+            commands::execution::user_set_role,
+            commands::execution::user_remove,
         ])
         .run(tauri::generate_context!())
         .expect("abiFlow 启动失败");
@@ -146,7 +153,7 @@ mod tests {
     #[test]
     fn smoke_schema_ready() {
         let conn = infra::db::open_in_memory().expect("建表应成功");
-        assert_eq!(infra::db::user_table_count(&conn).expect("统计"), 14);
+        assert_eq!(infra::db::user_table_count(&conn).expect("统计"), 15); // v7 加 users 表（14→15）
         // v0.5：放权演示 SOP 可安装，n1 为 human-owned（可放权对象）。
         let id = domain::examples::install_delegation_demo(&conn).expect("安装演示 SOP");
         assert_eq!(id, "sop-delegation-demo");
