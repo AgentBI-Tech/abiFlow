@@ -140,6 +140,8 @@ pub fn run() {
             commands::execution::user_logout,
             commands::execution::user_set_role,
             commands::execution::user_remove,
+            commands::execution::user_update,
+            commands::execution::user_reset_password,
         ])
         .run(tauri::generate_context!())
         .expect("abiFlow 启动失败");

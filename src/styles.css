@@ -156,6 +156,8 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 .list { list-style: none; margin: 0; padding: 0; }
 .list > li { padding: 11px 0; border-bottom: 1px dashed var(--border); }
 .list > li:last-child { border-bottom: 0; }
+/* 通用纵向堆叠容器（div.stack 与 label.stack 共用；label.stack 另有 width/margin 覆盖）。 */
+.stack { @apply flex flex-col; gap: 8px; }
 .row { @apply flex items-center flex-wrap; gap: 10px; }
 .row.actions { margin-top: 8px; }
 .row.sched { margin-top: 10px; padding-top: 10px; border-top: 1px dotted var(--border); align-items: flex-end; }
@@ -296,6 +298,22 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
   --text-dim: #64748b;
   --shadow: 0 1px 2px rgba(15,23,42,0.06);
 }
+/* 未登录锁屏：半透明遮罩盖住右侧内容区（侧栏固定 220px，仍可点左下角登录），提示先登录。 */
+.app-lock {
+  position: fixed; left: 220px; right: 0; top: 0; bottom: 0;
+  z-index: 50; display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, .38);
+  backdrop-filter: blur(2px);
+}
+.app-lock-card {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 28px 36px; border-radius: 14px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); box-shadow: var(--shadow);
+  text-align: center;
+}
+.app-lock-card .lock-title { font-size: 18px; font-weight: 700; }
+.app-lock-card .lock-sub { font-size: 13px; color: var(--text-dim); }
 .app-content h1, .app-content h2, .app-content h3 { color: var(--text); }
 .app-content .sub, .app-content .sub-row { color: var(--text-dim); }
 .app-content .ver { color: var(--text-dim); }

@@ -404,20 +404,28 @@ export function userList(): Promise<UserRow[]> {
 export function userCurrent(): Promise<CurrentUser | null> {
   return invoke("user_current");
 }
+// 这几个后端命令是平铺参数（非 payload 结构体）：Tauri v2 用 camelCase 传，
+// display_name → displayName、user_id → userId。包成 payload 会报 missing required key。
 export function userAdd(username: string, displayName: string, role: string, password: string): Promise<UserRow> {
-  return invoke("user_add", { payload: { username, displayName, role, password } });
+  return invoke("user_add", { username, displayName, role, password });
 }
 export function userLogin(username: string, password: string): Promise<CurrentUser> {
-  return invoke("user_login", { payload: { username, password } });
+  return invoke("user_login", { username, password });
 }
 export function userLogout(): Promise<void> {
   return invoke("user_logout");
 }
 export function userSetRole(userId: string, role: string): Promise<UserRow> {
-  return invoke("user_set_role", { payload: { userId, role } });
+  return invoke("user_set_role", { userId, role });
 }
 export function userRemove(userId: string): Promise<void> {
   return invoke("user_remove", { userId });
+}
+export function userUpdate(userId: string, displayName: string, role: string): Promise<UserRow> {
+  return invoke("user_update", { userId, displayName, role });
+}
+export function userResetPassword(userId: string, newPassword: string): Promise<void> {
+  return invoke("user_reset_password", { userId, newPassword });
 }
 
 export function errMessage(e: unknown): string {

@@ -748,3 +748,20 @@ pub fn user_remove(app: tauri::AppHandle, user_id: String) -> AppResult<()> {
     let conn = open_db(&app)?;
     crate::domain::user::delete_user(&conn, &user_id)
 }
+
+#[tauri::command]
+pub fn user_update(
+    app: tauri::AppHandle,
+    user_id: String,
+    display_name: String,
+    role: String,
+) -> AppResult<crate::domain::user::UserRow> {
+    let conn = open_db(&app)?;
+    crate::domain::user::update_user(&conn, &user_id, &display_name, &role)
+}
+
+#[tauri::command]
+pub fn user_reset_password(app: tauri::AppHandle, user_id: String, new_password: String) -> AppResult<()> {
+    let conn = open_db(&app)?;
+    crate::domain::user::reset_password(&conn, &user_id, &new_password)
+}

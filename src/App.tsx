@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound,
+  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound, LockKeyhole,
 } from "lucide-react";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
@@ -480,6 +480,18 @@ export default function App() {
         </>
       )}
       </>
+      )}
+
+      {/* 未登录锁屏：内容区半透明遮罩，提示先登录（用户与权限 tab 不遮，否则没法登录/建号）。 */}
+      {!currentUser && tab !== "user" && (
+        <div className="app-lock" data-lock="1">
+          <div className="app-lock-card">
+            <LockKeyhole size={30} strokeWidth={1.6} />
+            <div className="lock-title">请先登录</div>
+            <div className="lock-sub">登录后可查看内容、按角色使用工具与运行 SOP。</div>
+            <button onClick={() => setTab("user")}>去登录 / 管理用户</button>
+          </div>
+        </div>
       )}
         </main>
       </div>
