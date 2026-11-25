@@ -172,6 +172,130 @@ pub fn install_delegation_demo(conn: &rusqlite::Connection) -> AppResult<String>
     Ok(sop_id.into())
 }
 
+// ---- Shopify 只读工具组（2026-11-25）----
+// 政策/FAQ 走 Storefront MCP（免 token）；商品/订单/客户/门店走社区 Admin MCP（需 token）。
+// 只接只读工具：create/update/cancel/set_inventory/graphql_request 等写类工具一律不装。
+fn shopify_mcp_tool(id: &str, title: &str, server: &str, tool: &str, _args: Value) -> ToolDefPayload {
+    ToolDefPayload {
+        id: id.into(),
+        title: title.into(),
+        risk: "low".into(),
+        server: server.into(),
+        command: "mcp".into(),
+        scope: json!({
+            "kind": "mcp",
+            "server": server,
+            "tool": tool,
+            "read_only": true,
+            "plane": "public"
+        }),
+        enabled: true,
+    }
+}
+
+/// 6 个只读工具；args 默认值在 SOP 节点里覆盖（{{arg:*}} 可由节点 args 传入）。
+pub fn shopify_readonly_tools() -> Vec<ToolDefPayload> {
+    vec![
+        shopify_mcp_tool(
+            "shopify:policies", "Shopify 政策/FAQ（只读）", "shopify-storefront",
+            "search_shop_policies_and_faqs", json!({"query": "{{arg:query}}"}),
+        ),
+        shopify_mcp_tool(
+            "shopify:shop-info", "Shopify 门店信息（只读）", "shopify-admin", "get_shop", json!({}),
+        ),
+        shopify_mcp_tool(
+            "shopify:products", "Shopify 商品列表（只读）", "shopify-admin", "list_products",
+            json!({"first": 10}),
+        ),
+        shopify_mcp_tool(
+            "shopify:orders", "Shopify 订单列表（只读）", "shopify-admin", "list_orders",
+            json!({"first": 10}),
+        ),
+        shopify_mcp_tool(
+            "shopify:customers", "Shopify 客户列表（只读）", "shopify-admin", "list_customers",
+            json!({"first": 10}),
+        ),
+        shopify_mcp_tool(
+            "shopify:locations", "Shopify 门店位置（只读）", "shopify-admin", "list_locations",
+            json!({"first": 10}),
+        ),
+    ]
+}
+
+pub fn shopify_storefront_sop_definition() -> Value {
+    json!({
+        "version": 1,
+        "nodes": [
+            {"id":"n0","type":"start","config":{}},
+            {"id":"n1","type":"mcp_tool","config":{"tool":"shopify:policies","args":{"query":"What is your return policy?"},"timeout_s":30}},
+            {"id":"n2","type":"human_gate","config":{"reason":"review","prompt":"Shopify 政策/FAQ 已读取，请核对结果后放行或驳回。"}},
+            {"id":"n3","type":"end","config":{}}
+        ],
+        "edges": [
+            {"from":"n0","to":"n1"},
+            {"from":"n1","to":"n2"},
+            {"from":"n2","to":"n3"}
+        ]
+    })
+}
+
+pub fn shopify_admin_sop_definition() -> Value {
+    json!({
+        "version": 1,
+        "nodes": [
+            {"id":"n0","type":"start","config":{}},
+            {"id":"n1","type":"mcp_tool","config":{"tool":"shopify:shop-info","args":{},"timeout_s":30}},
+            {"id":"n2","type":"mcp_tool","config":{"tool":"shopify:products","args":{"first":10},"timeout_s":30}},
+            {"id":"n3","type":"mcp_tool","config":{"tool":"shopify:orders","args":{"first":10},"timeout_s":30}},
+            {"id":"n4","type":"human_gate","config":{"reason":"review","prompt":"Shopify 门店/商品/订单已只读拉取，请核对结果后放行或驳回。"}},
+            {"id":"n5","type":"end","config":{}}
+        ],
+        "edges": [
+            {"from":"n0","to":"n1"},
+            {"from":"n1","to":"n2"},
+            {"from":"n2","to":"n3"},
+            {"from":"n3","to":"n4"},
+            {"from":"n4","to":"n5"}
+        ]
+    })
+}
+
+/// 幂等安装 Shopify 只读工具 + 授权 + 两条 SOP（无调度：不自动对真店跑）。
+pub fn install_shopify_readonly(conn: &rusqlite::Connection) -> AppResult<Vec<String>> {
+    let mut ids = Vec::new();
+    for t in shopify_readonly_tools() {
+        let scope = serde_json::to_string(&t.scope)
+            .map_err(|e| crate::models::AppError::InvalidInput(e.to_string()))?;
+        store::upsert_tool(
+            conn, &t.id, &t.server, &t.command, &t.title, &t.risk, &scope, t.enabled,
+        )?;
+        for m in [Mode::Plan, Mode::Build, Mode::Review] {
+            store::upsert_tool_grant(conn, &t.id, m, true, &["public".into()])?;
+        }
+        ids.push(t.id);
+    }
+    for (sop_id, name, def) in [
+        ("sop-shopify-storefront", "Shopify 政策/FAQ 只读（Storefront）", shopify_storefront_sop_definition()),
+        ("sop-shopify-admin-read", "Shopify 门店/商品/订单 只读（Admin）", shopify_admin_sop_definition()),
+    ] {
+        let existing: Option<i32> = conn
+            .query_row("SELECT version FROM sops WHERE id=?1", [sop_id], |r| r.get(0))
+            .optional()
+            .map_err(|e| crate::models::AppError::Db(e.to_string()))?;
+        if existing.is_none() {
+            let now = crate::models::now_secs();
+            conn.execute(
+                "INSERT INTO sops(id,name,version,trigger_json,risk,owner_policy,enabled,created_at,updated_at,definition) \
+                 VALUES(?1,?2,1,'{}','low','hybrid',1,?3,?3,?4)",
+                params![sop_id, name, now, def.to_string()],
+            )
+            .map_err(|e| crate::models::AppError::Db(e.to_string()))?;
+        }
+        ids.push(sop_id.into());
+    }
+    Ok(ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +349,26 @@ mod tests {
         def.validate(&known).unwrap();
         assert!(store::get_sop(&c, &sop_id).is_ok());
         assert!(store::dashboard(&c).unwrap().schedules.iter().any(|s| s.sop_id == sop_id));
+    }
+
+    #[test]
+    fn shopify_readonly_installs_and_validates() {
+        use crate::domain::sop::SopDefinition;
+        let c = db::open_in_memory().unwrap();
+        let ids = install_shopify_readonly(&c).unwrap();
+        assert_eq!(ids.len(), 8, "6 工具 + 2 SOP");
+        let known = store::known_tools(&c).unwrap();
+        for t in shopify_readonly_tools() {
+            assert!(known.contains(&t.id));
+        }
+        for def in [shopify_storefront_sop_definition(), shopify_admin_sop_definition()] {
+            let sop: SopDefinition = serde_json::from_value(def).unwrap();
+            sop.validate(&known).unwrap();
+        }
+        // 幂等：重复安装不报错、不新增 SOP、不自动建调度。
+        install_shopify_readonly(&c).unwrap();
+        assert_eq!(store::dashboard(&c).unwrap().sops.len(), 2);
+        assert!(store::dashboard(&c).unwrap().schedules.is_empty());
     }
 
 }

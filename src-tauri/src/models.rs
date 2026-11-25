@@ -45,6 +45,9 @@ pub struct McpServerRow {
     pub note: String,
     pub transport: String,
     pub url: String,
+    /// stdio 子进程要透传的环境变量名（只名字，不值）。
+    #[serde(default)]
+    pub env: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +63,9 @@ pub struct McpServerPayload {
     pub transport: String,
     #[serde(default)]
     pub url: String,
+    /// stdio 子进程要透传的环境变量名（只名字，不值；值来自 secrets.env / shell）。
+    #[serde(default)]
+    pub env: Vec<String>,
 }
 
 fn default_mcp_transport() -> String { "stdio".into() }

@@ -1,10 +1,10 @@
 // 应用配置 + MCP server 配置（§3.1 补齐 IPC）。
 // 配置不含密钥值；改 LLM 配置后需重启才生效（AppLlm 在 setup 构建一次）。
-// MCP server 配置是为 MCP client 协议栈预备的——当前不真连 server，如实标注。
+// MCP server 配置会被执行器真连：stdio 可透传 env 变量名，值由用户自填 secrets.env。
 
 import { useEffect, useState } from "react";
 import {
-  configGet, configSet, mcpServerList, mcpServerAdd, mcpServerRemove,
+  configGet, configSet, mcpServerList, mcpServerAdd, mcpServerRemove, secretsEnvPath,
   errMessage,
   type McpServerInfo,
 } from "../lib/ipc";
@@ -14,7 +14,8 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
   const [cfg, setCfg] = useState<Record<string, string>>({});
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const [newSrv, setNewSrv] = useState<McpServerInfo>({ id: "", command: "", args: [], note: "", transport: "stdio", url: "" });
+  const [newSrv, setNewSrv] = useState<McpServerInfo>({ id: "", command: "", args: [], note: "", transport: "stdio", url: "", env: [] });
+  const [secretsPath, setSecretsPath] = useState("");
   const [busy, setBusy] = useState("");
   const [theme, setTheme] = useState<Theme>(currentTheme());
 
@@ -27,8 +28,8 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
 
   const load = async () => {
     try {
-      const [c, s] = await Promise.all([configGet(), mcpServerList()]);
-      setCfg(c); setDraft({ ...c }); setServers(s);
+      const [c, s, sp] = await Promise.all([configGet(), mcpServerList(), secretsEnvPath()]);
+      setCfg(c); setDraft({ ...c }); setServers(s); setSecretsPath(sp);
       onError("");
     } catch (e) { onError(errMessage(e)); }
   };
@@ -50,8 +51,8 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
     if (!newSrv.id.trim() || !newSrv.command.trim()) { onError("id 与 command 必填"); return; }
     setBusy("add-srv");
     try {
-      setServers(await mcpServerAdd({ ...newSrv, args: newSrv.args.filter(Boolean) }));
-      setNewSrv({ id: "", command: "", args: [], note: "", transport: "stdio", url: "" });
+      setServers(await mcpServerAdd({ ...newSrv, args: newSrv.args.filter(Boolean), env: (newSrv.env ?? []).filter(Boolean) }));
+      setNewSrv({ id: "", command: "", args: [], note: "", transport: "stdio", url: "", env: [] });
       onError("");
     } catch (e) { onError(errMessage(e)); }
     finally { setBusy(""); }
@@ -97,13 +98,14 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
       <section className="card">
         <h2>MCP server 配置 <span className="count">{servers.length}</span></h2>
         <p className="sub-row">
-          为 MCP client 协议栈预备：此处只存配置（写 mcp_servers.json），<strong>当前不真连 server</strong>。
-          协议栈就绪后执行器才会消费这些配置。
+          执行器会按此配置真连 MCP server（写 mcp_servers.json）。stdio 可填要透传的<strong>环境变量名</strong>；
+          值请自己写进 secrets.env：<code>{secretsPath || "（启动后可见）"}</code>（600 权限，不进配置/日志/git）。
         </p>
         <ul className="list">
           {servers.map((s) => (
             <li key={s.id} data-testid="mcp-server-item">
               <div className="row"><strong>{s.id}</strong><span className="ver">{s.transport === "http" ? s.url : `${s.command} ${s.args.join(" ")}`}</span><span className="pill">{s.transport ?? "stdio"}</span></div>
+              {(s.env ?? []).length > 0 && <p className="sub-row">透传 env 名：{s.env.join("、")}</p>}
               {s.note && <p className="sub-row">{s.note}</p>}
               <div className="row actions">
                 <button disabled={!!busy} onClick={() => removeSrv(s.id)}>删除</button>
@@ -126,6 +128,9 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
             <>
               <label className="stack">command <input value={newSrv.command} onChange={(e) => setNewSrv({ ...newSrv, command: e.target.value })} placeholder="npx / uvx / python3" /></label>
               <label className="stack">args（空格分隔） <input value={newSrv.args.join(" ")} onChange={(e) => setNewSrv({ ...newSrv, args: e.target.value.split(/\s+/).filter(Boolean) })} /></label>
+              <label className="stack">透传 env 变量名（逗号分隔，只填名字不填值）
+                <input value={(newSrv.env ?? []).join(",")} onChange={(e) => setNewSrv({ ...newSrv, env: e.target.value.split(/[,，\s]+/).filter(Boolean) })} placeholder="SHOPIFY_STORE_DOMAIN,SHOPIFY_ACCESS_TOKEN" />
+              </label>
             </>
           )}
           <label className="stack">说明 <input value={newSrv.note} onChange={(e) => setNewSrv({ ...newSrv, note: e.target.value })} /></label>

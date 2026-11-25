@@ -32,6 +32,10 @@ pub struct McpServer {
     /// http 传输的目标 url（stdio 时忽略）。
     #[serde(default)]
     pub url: String,
+    /// stdio 子进程要透传的**环境变量名列表**（只存名字，不存值）。
+    /// 值由进程环境提供（来自 secrets.env 或 shell export），不写进本文件、不进日志。
+    #[serde(default)]
+    pub env: Vec<String>,
 }
 
 fn default_transport() -> String { "stdio".into() }
@@ -68,22 +72,40 @@ pub fn set_data_dir(p: PathBuf) {
 fn config_path() -> AppResult<PathBuf> { Ok(dir()?.join("config.json")) }
 fn mcp_path() -> AppResult<PathBuf> { Ok(dir()?.join("mcp_servers.json")) }
 fn llm_env_path() -> AppResult<PathBuf> { Ok(dir()?.join("llm.env")) }
+fn secrets_env_path() -> AppResult<PathBuf> { Ok(dir()?.join("secrets.env")) }
+
+/// 把一个 env 文件里的键注入进程环境（键只从进程环境读，绝不回显值）。
+/// 文件不存在不算错（首次启动时没有它）；已存在的真实 env 变量不被覆盖。
+fn load_env_file(path: &std::path::Path) {
+    if path.exists() {
+        // from_path 不覆盖已设置的变量 → shell 里 export 的真值优先于文件。
+        let _ = dotenvy::from_path(path);
+    }
+}
 
 /// 把 <data_dir>/llm.env 里的键注入进程环境（给 build_llm 读）。
-/// 文件不存在不算错（首次启动/只用 Mock 时没有它）；已存在的真实 env 变量不被覆盖。
-/// 只读键名/路径，绝不回显值。
 pub fn load_llm_env() {
     if let Ok(path) = llm_env_path() {
-        if path.exists() {
-            // from_path 不覆盖已设置的变量 → shell 里 export 的真值优先于文件。
-            let _ = dotenvy::from_path(&path);
-        }
+        load_env_file(&path);
+    }
+}
+
+/// 把 <data_dir>/secrets.env 里的键注入进程环境（给 MCP stdio server 透传用）。
+/// 用户自己写这个文件（如 SHOPIFY_ACCESS_TOKEN=shpat_...），值不进 config.json/代码/日志/git。
+pub fn load_secrets_env() {
+    if let Ok(path) = secrets_env_path() {
+        load_env_file(&path);
     }
 }
 
 /// env 文件路径（给 UI/日志展示用，仅路径不含值）。
 pub fn llm_env_path_display() -> String {
     llm_env_path().map(|p| p.display().to_string()).unwrap_or_default()
+}
+
+/// secrets.env 路径（给 UI 展示用，仅路径不含值）。
+pub fn secrets_env_path_display() -> String {
+    secrets_env_path().map(|p| p.display().to_string()).unwrap_or_default()
 }
 
 fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> AppResult<T> {
@@ -171,9 +193,10 @@ mod tests {
     #[test]
     fn mcp_crud() {
         let id = format!("srv-{}", std::process::id());
-        let s = McpServer { id: id.clone(), command: "npx".into(), args: vec!["x".into()], note: "预备".into(), transport: "stdio".into(), url: String::new() };
+        let s = McpServer { id: id.clone(), command: "npx".into(), args: vec!["x".into()], note: "预备".into(), transport: "stdio".into(), url: String::new(), env: vec!["SHOPIFY_ACCESS_TOKEN".into()] };
         let list = mcp_add(s).unwrap();
-        assert!(list.iter().any(|x| x.id == id));
+        let found = list.iter().find(|x| x.id == id).unwrap();
+        assert_eq!(found.env, vec!["SHOPIFY_ACCESS_TOKEN".to_string()], "env 只存变量名");
         let list = mcp_remove(&id).unwrap();
         assert!(!list.iter().any(|x| x.id == id));
     }

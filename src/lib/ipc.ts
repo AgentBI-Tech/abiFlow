@@ -370,7 +370,7 @@ export function configGet(): Promise<Record<string, string>> {
 export function configSet(key: string, value: string): Promise<void> {
   return invoke("config_set", { payload: { key, value } });
 }
-export type McpServerInfo = { id: string; command: string; args: string[]; note: string; transport: string; url: string };
+export type McpServerInfo = { id: string; command: string; args: string[]; note: string; transport: string; url: string; env: string[] };
 export function mcpServerList(): Promise<McpServerInfo[]> {
   return invoke("mcp_server_list");
 }
@@ -379,6 +379,10 @@ export function mcpServerAdd(s: McpServerInfo): Promise<McpServerInfo[]> {
 }
 export function mcpServerRemove(id: string): Promise<McpServerInfo[]> {
   return invoke("mcp_server_remove", { id });
+}
+/// secrets.env 路径（仅路径、不含值）：凭据由用户自己写进这个文件。
+export function secretsEnvPath(): Promise<string> {
+  return invoke("secrets_env_path");
 }
 export function sopParseText(text: string): Promise<Record<string, unknown>> {
   return invoke("sop_parse_text", { text });

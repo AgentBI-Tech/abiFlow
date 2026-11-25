@@ -76,8 +76,15 @@ pub struct StdioTransport {
 
 impl StdioTransport {
     pub fn spawn(command: &str, args: &[String]) -> AppResult<Self> {
+        Self::spawn_with_env(command, args, &[])
+    }
+
+    /// 带环境变量透传启动子进程。`env` 是 (变量名, 值) 列表，值来自进程环境
+    /// （由 secrets.env 或 shell 提供），不写进配置文件、不进日志。
+    pub fn spawn_with_env(command: &str, args: &[String], env: &[(String, String)]) -> AppResult<Self> {
         let mut child = Command::new(command)
             .args(args)
+            .envs(env.iter().cloned())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null()) // stderr 不混入 stdout，避免污染 JSON-RPC
@@ -250,6 +257,17 @@ mod tests {
     fn fixture(name: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent().unwrap().join("tests").join("fixtures").join(name)
+    }
+
+    #[test]
+    fn stdio_passes_env_to_child() {
+        // 子进程把透传进来的 env 值回显在 JSON-RPC result 里；不打印、不落盘。
+        let script = "import sys,os,json\nfor line in sys.stdin:\n  try: m=json.loads(line)\n  except Exception: continue\n  print(json.dumps({'jsonrpc':'2.0','id':m.get('id',1),'result':os.environ.get('ABI_TEST_ENV','MISSING')}),flush=True)\n";
+        let args = vec!["-c".to_string(), script.to_string()];
+        let env = vec![("ABI_TEST_ENV".to_string(), "shopify-token-test".to_string())];
+        let mut t = StdioTransport::spawn_with_env("python3", &args, &env).unwrap();
+        let resp = t.send(&request(1, "ping", json!({})), false).unwrap();
+        assert_eq!(resp["result"], "shopify-token-test", "子进程应看到透传的 env 值");
     }
 
     #[test]

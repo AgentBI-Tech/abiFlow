@@ -53,6 +53,9 @@ pub fn run() {
             }
             // LLM env 文件：在 build_llm 之前加载（键只从进程环境读，值不进 config.json/代码）。
             app_config::load_llm_env();
+            // secrets.env：MCP stdio server 的凭据（如 Shopify token）由用户自填，启动时注入进程环境。
+            // 值不进 config.json / mcp_servers.json / 代码 / 日志；shell export 的真值优先。
+            app_config::load_secrets_env();
             let stop = Arc::new(AtomicBool::new(false));
             app.manage(SchedulerStop(stop.clone()));
             let ks: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
@@ -93,6 +96,7 @@ pub fn run() {
             commands::execution::mcp_server_list,
             commands::execution::mcp_server_add,
             commands::execution::mcp_server_remove,
+            commands::execution::secrets_env_path,
             commands::execution::sop_set_enabled,
             commands::execution::schedule_set,
             commands::execution::run_start,
@@ -128,6 +132,7 @@ pub fn run() {
             commands::execution::tool_upsert,
             commands::execution::tool_remove,
             commands::execution::example_tools_install,
+            commands::execution::shopify_tools_install,
             commands::execution::maintenance_sop_install,
             commands::execution::delegation_demo_install,
             commands::execution::run_as_agent,

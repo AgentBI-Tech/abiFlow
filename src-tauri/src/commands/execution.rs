@@ -85,33 +85,34 @@ pub fn config_set(payload: ConfigSetPayload) -> AppResult<()> {
     app_config::config_set(&payload.key, &payload.value)
 }
 
-/// MCP server 配置（为 MCP client 协议栈预备；当前只存配置，不真连 server）。
+fn mcp_row(s: app_config::McpServer) -> McpServerRow {
+    McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note, transport: s.transport, url: s.url, env: s.env }
+}
+
+/// MCP server 配置（为 MCP client 协议栈预备；stdio 子进程可透传 env 变量名，值来自 secrets.env / shell）。
 #[tauri::command]
 pub fn mcp_server_list() -> AppResult<Vec<McpServerRow>> {
-    Ok(app_config::mcp_list()?
-        .into_iter()
-        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note, transport: s.transport, url: s.url })
-        .collect())
+    Ok(app_config::mcp_list()?.into_iter().map(mcp_row).collect())
 }
 
 #[tauri::command]
 pub fn mcp_server_add(payload: McpServerPayload) -> AppResult<Vec<McpServerRow>> {
     let server = app_config::McpServer {
         id: payload.id, command: payload.command, args: payload.args, note: payload.note,
-        transport: payload.transport, url: payload.url,
+        transport: payload.transport, url: payload.url, env: payload.env,
     };
-    Ok(app_config::mcp_add(server)?
-        .into_iter()
-        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note, transport: s.transport, url: s.url })
-        .collect())
+    Ok(app_config::mcp_add(server)?.into_iter().map(mcp_row).collect())
 }
 
 #[tauri::command]
 pub fn mcp_server_remove(id: String) -> AppResult<Vec<McpServerRow>> {
-    Ok(app_config::mcp_remove(&id)?
-        .into_iter()
-        .map(|s| McpServerRow { id: s.id, command: s.command, args: s.args, note: s.note, transport: s.transport, url: s.url })
-        .collect())
+    Ok(app_config::mcp_remove(&id)?.into_iter().map(mcp_row).collect())
+}
+
+/// secrets.env 路径（仅路径、不含值），供 UI 提示用户在哪填 token。
+#[tauri::command]
+pub fn secrets_env_path() -> String {
+    app_config::secrets_env_path_display()
 }
 
 #[tauri::command]
@@ -652,6 +653,13 @@ pub fn tool_remove(app: tauri::AppHandle, id: String) -> AppResult<()> {
 pub fn example_tools_install(app: tauri::AppHandle) -> AppResult<Vec<String>> {
     let conn = open_db(&app)?;
     examples::install_agentbi_examples(&conn)
+}
+
+/// 幂等安装 Shopify 只读工具组 + 两条 SOP（不建调度，不自动对真店跑）。
+#[tauri::command]
+pub fn shopify_tools_install(app: tauri::AppHandle) -> AppResult<Vec<String>> {
+    let conn = open_db(&app)?;
+    examples::install_shopify_readonly(&conn)
 }
 
 /// 安装放权演示 SOP（human-owned agent_step，本地 Mock，无外部依赖）。

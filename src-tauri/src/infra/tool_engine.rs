@@ -125,8 +125,16 @@ fn run_mcp(args: &Value, scope: &Value, ks: &dyn KeyStore) -> AppResult<Value> {
         client.initialize()?;
         client.call_tool(tool_name, &safe_args)?
     } else {
-        // 默认 stdio：command + args 启动子进程。
-        let mut client = McpClient::new(StdioTransport::spawn(&server.command, &server.args)?);
+        // 默认 stdio：command + args 启动子进程；按配置把 env 变量名从进程环境取值透传。
+        // 只回显变量名（缺值时），绝不回显值本身。
+        let mut pass_env: Vec<(String, String)> = Vec::new();
+        for name in &server.env {
+            let value = std::env::var(name).map_err(|_| {
+                AppError::McpUnavailable(format!("MCP server 缺环境变量：{}（请在 secrets.env 或 shell 中设置）", name))
+            })?;
+            pass_env.push((name.clone(), value));
+        }
+        let mut client = McpClient::new(StdioTransport::spawn_with_env(&server.command, &server.args, &pass_env)?);
         client.initialize()?;
         client.call_tool(tool_name, &safe_args)?
     };
@@ -379,7 +387,7 @@ mod tests {
         let _ = app_config::mcp_remove(&id); // 清理可能残留
         app_config::mcp_add(app_config::McpServer {
             id: id.clone(), command: "python3".into(), args: vec![fixture],
-            note: "tool_engine 测试".into(), transport: "stdio".into(), url: String::new(),
+            note: "tool_engine 测试".into(), transport: "stdio".into(), url: String::new(), env: vec![],
         }).unwrap();
 
         let ks = MemoryKeyStore::new();
@@ -389,6 +397,24 @@ mod tests {
         assert_eq!(out["sum"], 15, "ToolEngine 应经 MCP 协议栈拿到真实结果");
 
         let _ = app_config::mcp_remove(&id); // 清理
+    }
+
+    #[test]
+    fn mcp_kind_missing_env_is_error_naming_only_the_var() {
+        // 缺 env 值时报错只含变量名，不回显值（这里本就没有值）。
+        let id = format!("te-mcp-env-{}", std::process::id());
+        let var = format!("ABI_TE_MISSING_{}", std::process::id());
+        let _ = app_config::mcp_remove(&id);
+        app_config::mcp_add(app_config::McpServer {
+            id: id.clone(), command: "python3".into(), args: vec![], note: String::new(),
+            transport: "stdio".into(), url: String::new(), env: vec![var.clone()],
+        }).unwrap();
+        let ks = MemoryKeyStore::new();
+        let engine = ToolEngine::new(std::sync::Arc::new(ks) as std::sync::Arc<dyn KeyStore>);
+        let err = engine.run("mcp:x", &json!({}), &json!({"kind":"mcp","server":id,"tool":"x"}))
+            .unwrap_err().to_string();
+        assert!(err.contains(&var), "报错应点名缺失的变量：{}", err);
+        let _ = app_config::mcp_remove(&id);
     }
 
     #[test]
