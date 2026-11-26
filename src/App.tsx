@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound, LockKeyhole,
+  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound, LockKeyhole, PlayCircle,
 } from "lucide-react";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
@@ -46,6 +46,7 @@ const VERDICT_ZH: Record<string, string> = { pass: "通过", fail: "未通过", 
 // 侧栏导航项：icon 用 lucide，key 与 tab state 一致。
 const NAV_ITEMS = [
   { key: "board", label: "运营看板", icon: LayoutDashboard },
+  { key: "runs", label: "SOP 与运行", icon: PlayCircle },
   { key: "canvas", label: "SOP 画布", icon: Workflow },
   { key: "tools", label: "工具与权限", icon: Wrench },
   { key: "custom", label: "自定义工具", icon: Puzzle },
@@ -70,7 +71,7 @@ export default function App() {
   const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config" | "user">("board");
+  const [tab, setTab] = useState<"board" | "runs" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config" | "user">("board");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selCanvasSop, setSelCanvasSop] = useState("");
   const [canvasMode, setCanvasMode] = useState<"read" | "edit" | "lane">("edit");
@@ -275,6 +276,8 @@ export default function App() {
             <section className="card"><p className="empty">还没有 SOP，点「安装演示 SOP」开始。</p></section>
           )}
 
+          {tab === "board" && (
+          <>
           <BoardPanel runs={data.runs} onOpen={openRun} activeStatus={detail?.run.status ?? null} />
 
           <section className="card" data-testid="board-summary">
@@ -322,7 +325,11 @@ export default function App() {
             <p className="sub-row" style={{ marginTop: 10 }}>{data.board.scopeNote}</p>
             </details>
           </section>
+          </>
+          )}
 
+          {tab === "runs" && (
+          <>
           <section className="card">
             <h2>SOP 列表</h2>
             <ul className="list">
@@ -449,12 +456,16 @@ export default function App() {
               </ul>
             )}
           </section>
+          </>
+          )}
 
           {detail && (
-            <section className="card" data-testid="run-detail" ref={detailRef}>
-              <div className="row">
+            <>
+            <div className="drawer-scrim" onClick={() => { setDetail(null); detailRunIdRef.current = null; }} data-drawer-scrim="1" />
+            <aside className="run-drawer" data-testid="run-detail" ref={detailRef}>
+              <div className="row drawer-head">
                 <h2>运行详情</h2>
-                <button className="close" onClick={() => { setDetail(null); detailRunIdRef.current = null; }}>关闭</button>
+                <button className="close" onClick={() => { setDetail(null); detailRunIdRef.current = null; }}>关闭 ✕</button>
               </div>
               <p className="sub-row">{detail.run.id} · {STATUS_ZH[detail.run.status] ?? detail.run.status}</p>
               <RunGantt detail={detail} />
@@ -569,7 +580,8 @@ export default function App() {
                   </div>
                 </div>
               )}
-            </section>
+            </aside>
+            </>
           )}
         </>
       )}

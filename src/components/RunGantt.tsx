@@ -50,18 +50,60 @@ export default function RunGantt({ detail }: { detail: RunDetail }) {
     const width = 100 / n;
     return { left, width };
   };
-  // 时间视图：真实时间语义；0 时长给最小可见宽度，但不再挤在起点（用 seq 做下限偏移）。
-  const timePos = (s: StepRow) => {
-    if (!s.startedAt) return { left: 0, width: 0 };
-    const left = ((s.startedAt - base) / total) * 100;
-    const finish = s.finishedAt ?? nowSec;
-    const width = ((finish - s.startedAt) / total) * 100;
-    return {
-      left: Math.max(0, Math.min(99, left)),
-      // 秒级时间戳下 width 常为 0：给 1.5% 最小宽度，但不超过剩余轨道。
-      width: Math.max(1.5, Math.min(100 - left, width)),
-    };
+  // 时间视图：把「相邻步骤间 >2s 的无活动段」压缩成固定窄宽，活动段仍按真实耗时比例。
+  // 这样既保留时间语义（耗时/并行可读），又不会因一段长时间等待留下大片空白。
+  const GAP_THRESHOLD = 2;   // 秒：超过此值视为空白段
+  const GAP_PCT = 4;         // 每个空白段压缩后占压缩轴 4%
+  const MIN_BAR_PCT = 1.5;   // 色带最小可见宽度
+  type Seg = { start: number; end: number; width: number; offset: number; gap: boolean };
+  const intervals = steps.filter((s) => s.startedAt).map((s) => ({
+    start: s.startedAt!, end: Math.max(s.startedAt!, s.finishedAt ?? nowSec),
+  })).sort((a, b) => a.start - b.start);
+
+  const segments: Seg[] = [];
+  if (intervals.length) {
+    segments.push({ ...intervals[0], width: 0, offset: 0, gap: false });
+    for (let i = 1; i < intervals.length; i++) {
+      const iv = intervals[i];
+      const prevEnd = Math.max(segments[segments.length - 1].end, intervals[i - 1].end);
+      if (iv.start - prevEnd > GAP_THRESHOLD) {
+        segments.push({ start: prevEnd, end: iv.start, width: GAP_PCT, offset: 0, gap: true });
+      }
+      segments.push({ ...iv, width: 0, offset: 0, gap: false });
+    }
+  }
+  const gapCount = segments.filter((s) => s.gap).length;
+  const activeSecs = segments.filter((s) => !s.gap)
+    .reduce((n, s) => n + Math.max(0.001, s.end - s.start), 0);
+  const activePctTotal = Math.max(1, 100 - gapCount * GAP_PCT);
+  for (const seg of segments) {
+    if (!seg.gap) seg.width = (Math.max(0.001, seg.end - seg.start) / activeSecs) * activePctTotal;
+  }
+  let cursor = 0;
+  for (const seg of segments) { seg.offset = cursor; cursor += seg.width; }
+
+  const timeToPct = (ts: number): number => {
+    if (!segments.length) return 0;
+    if (ts <= segments[0].start) return 0;
+    for (const seg of segments) {
+      if (ts >= seg.end) continue;
+      if (ts <= seg.start) return seg.offset;
+      return seg.offset + ((ts - seg.start) / Math.max(0.001, seg.end - seg.start)) * seg.width;
+    }
+    return cursor;
   };
+  const timePos = (s: StepRow) => {
+    if (!s.startedAt) return { left: Math.max(0, 100 - MIN_BAR_PCT), width: MIN_BAR_PCT };
+    const left = timeToPct(s.startedAt);
+    const right = timeToPct(Math.max(s.startedAt, s.finishedAt ?? nowSec));
+    return { left, width: Math.max(MIN_BAR_PCT, right - left) };
+  };
+  // 刻度：活动段标起始时间，空白段标「…N s 无活动」，按压缩轴位置绝对定位。
+  const timeTicks = segments.map((seg) => ({
+    left: seg.gap ? seg.offset + seg.width / 2 : seg.offset,
+    label: seg.gap ? `…${Math.max(1, Math.round(seg.end - seg.start))}s` : clock(seg.start),
+    gap: seg.gap,
+  }));
   const pos = view === "seq" ? seqPos : timePos;
 
   // 只有「已开始、未结束」的运行中步骤才脉冲；pending（startedAt 为空）一律不闪。
@@ -105,10 +147,14 @@ export default function RunGantt({ detail }: { detail: RunDetail }) {
         <div className="gantt-inner">
           <div className="gantt-head">
             <div>步骤 / 执行主体</div>
-            <div className="gantt-ticks">
+            <div className={`gantt-ticks ${view === "time" ? "abs" : ""}`}>
               {view === "seq"
                 ? steps.map((s) => <span key={s.id}>{s.seq}</span>)
-                : [0, 0.25, 0.5, 0.75, 1].map((p) => <span key={p}>{clock(base + total * p)}</span>)}
+                : timeTicks.map((t, i) => (
+                    <span key={i} className={t.gap ? "gap" : ""} style={view === "time" ? { left: `${Math.min(97, t.left)}%` } : undefined}>
+                      {t.label}
+                    </span>
+                  ))}
             </div>
           </div>
           {steps.length === 0 && <p className="empty">本次 run 尚无步骤。</p>}
