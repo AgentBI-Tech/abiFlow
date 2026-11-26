@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound, LockKeyhole,
@@ -11,7 +11,10 @@ import ConfigPanel from "./components/ConfigPanel";
 import UserPanel from "./components/UserPanel";
 import { applyTheme, currentTheme, themeFromBackend } from "./lib/theme";
 import SopCanvas from "./components/SopCanvas";
+import SopLaneCanvas from "./components/SopLaneCanvas";
 import SopEditor from "./components/SopEditor";
+import BoardPanel from "./components/BoardPanel";
+import RunGantt from "./components/RunGantt";
 import abiLogo from "./assets/abilogo.svg";
 import {
   configGet,
@@ -60,6 +63,8 @@ function fmtTime(ts: number | null): string {
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
+  // 当前打开的 run id：事件按 payload.runId 判断是否要刷新详情（避免闭包陈旧）。
+  const detailRunIdRef = useRef<string | null>(null);
   const [arbNote, setArbNote] = useState("");
   const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
@@ -67,7 +72,7 @@ export default function App() {
   const [tab, setTab] = useState<"board" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config" | "user">("board");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selCanvasSop, setSelCanvasSop] = useState("");
-  const [canvasMode, setCanvasMode] = useState<"read" | "edit">("edit");
+  const [canvasMode, setCanvasMode] = useState<"read" | "edit" | "lane">("edit");
   const [cronDraft, setCronDraft] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
@@ -99,7 +104,14 @@ export default function App() {
     const events = ["run:status", "step:update", "gate:requested", "review:result", "tool:audit"];
     let cancels: Array<() => void> = [];
     Promise.all(events.map((name) =>
-      listen(name, () => { if (alive) void refresh(); })
+      listen(name, (e) => {
+        if (!alive) return;
+        void refresh();
+        const rid = (e.payload as { runId?: string } | undefined)?.runId;
+        if (rid && rid === detailRunIdRef.current) {
+          void runGet(rid).then((d) => { if (alive) setDetail(d); }).catch(() => {});
+        }
+      })
     )).then((fns) => {
       if (!alive) { fns.forEach((f) => f()); return; }
       cancels = fns;
@@ -122,7 +134,9 @@ export default function App() {
 
   async function openRun(run: RunRow) {
     try {
-      setDetail(await runGet(run.id));
+      const d = await runGet(run.id);
+      setDetail(d);
+      detailRunIdRef.current = d.run.id;
       setErr("");
     } catch (e) {
       setErr(errMessage(e));
@@ -190,6 +204,7 @@ export default function App() {
               </select>
               <button className={canvasMode === "edit" ? "tab on" : "tab"} onClick={() => setCanvasMode("edit")}>编辑</button>
               <button className={canvasMode === "read" ? "tab on" : "tab"} onClick={() => setCanvasMode("read")}>只读</button>
+              <button className={canvasMode === "lane" ? "tab on" : "tab"} onClick={() => setCanvasMode("lane")}>泳道</button>
             </section>
             {selCanvasSop ? (
               (() => {
@@ -197,7 +212,9 @@ export default function App() {
                 if (!sop) return <p className="empty">SOP 不存在。</p>;
                 return canvasMode === "edit"
                   ? <SopEditor sop={sop} onSaved={refresh} />
-                  : <SopCanvas sop={sop} />;
+                  : canvasMode === "lane"
+                    ? <SopLaneCanvas sop={sop} steps={detail?.run.sopId === sop.id ? detail.steps : []} />
+                    : <SopCanvas sop={sop} />;
               })()
             ) : (
               <p className="empty">先选一条 SOP。还没有 SOP 的话，去「运营看板」点「安装演示 SOP」。</p>
@@ -235,6 +252,8 @@ export default function App() {
           {data.sops.length === 0 && (
             <section className="card"><p className="empty">还没有 SOP，点「安装演示 SOP」开始。</p></section>
           )}
+
+          <BoardPanel runs={data.runs} onOpen={openRun} activeStatus={detail?.run.status ?? null} />
 
           <section className="card" data-testid="board-summary">
             <h2>完成度看板</h2>
@@ -410,19 +429,22 @@ export default function App() {
             <section className="card" data-testid="run-detail">
               <div className="row">
                 <h2>运行详情</h2>
-                <button className="close" onClick={() => setDetail(null)}>关闭</button>
+                <button className="close" onClick={() => { setDetail(null); detailRunIdRef.current = null; }}>关闭</button>
               </div>
               <p className="sub-row">{detail.run.id} · {STATUS_ZH[detail.run.status] ?? detail.run.status}</p>
-              <h3>步骤</h3>
-              <ol className="steps">
-                {detail.steps.map((s) => (
-                  <li key={s.id} data-testid="step-item">
-                    <strong>{s.nodeType}</strong> — {s.status}
-                    {s.toolRef && <span className="ver"> · {s.toolRef}</span>}
-                    {s.outputJson && <pre>{s.outputJson}</pre>}
-                  </li>
-                ))}
-              </ol>
+              <RunGantt detail={detail} />
+              <details className="steps-fold">
+                <summary>步骤明细（{detail.steps.length}）</summary>
+                <ol className="steps">
+                  {detail.steps.map((s) => (
+                    <li key={s.id} data-testid="step-item">
+                      <strong>{s.nodeType}</strong> — {s.status}
+                      {s.toolRef && <span className="ver"> · {s.toolRef}</span>}
+                      {s.outputJson && <pre>{s.outputJson}</pre>}
+                    </li>
+                  ))}
+                </ol>
+              </details>
               <h3>验收</h3>
               <ul className="list">
                 {detail.acceptance.map((a) => (
