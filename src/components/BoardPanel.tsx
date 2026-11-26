@@ -54,6 +54,11 @@ export default function BoardPanel({
         <h2>任务看板 + 状态机</h2>
         <span className="ver">卡在哪个状态、卡在谁那里</span>
       </div>
+      <ol className="board-guide">
+        <li><b>① 看状态</b>：下方四列是所有任务；点任务卡 → 自动跳到该 run 的甘特图。</li>
+        <li><b>② 跑 SOP</b>：到「SOP 列表」点「手动运行」，看板会随执行自动更新。</li>
+        <li><b>③ 看时间线</b>：甘特图色带＝耗时，并排＝并行；点色带看输入/输出。</li>
+      </ol>
 
       <div className="state-machine-wrap">
         <svg viewBox="0 0 840 230" width="100%" height="auto" role="img" aria-label="SOP 任务状态机">
@@ -123,7 +128,7 @@ export default function BoardPanel({
           );
         })}
       </div>
-      <p className="sub-row">点击任务卡打开详情；状态机只读，操作在「运行历史 / 运行详情」中进行。</p>
+      <p className="sub-row">状态机只读；暂停 / 仲裁等操作在运行详情里进行。</p>
     </section>
   );
 }

@@ -65,6 +65,7 @@ export default function App() {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   // 当前打开的 run id：事件按 payload.runId 判断是否要刷新详情（避免闭包陈旧）。
   const detailRunIdRef = useRef<string | null>(null);
+  const detailRef = useRef<HTMLElement | null>(null);
   const [arbNote, setArbNote] = useState("");
   const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
@@ -132,14 +133,35 @@ export default function App() {
     }
   }
 
-  async function openRun(run: RunRow) {
+  async function openRunById(id: string) {
     try {
-      const d = await runGet(run.id);
+      const d = await runGet(id);
       setDetail(d);
       detailRunIdRef.current = d.run.id;
       setErr("");
+      // 详情渲染在页面底部：打开后滚过去，否则用户点了「查看详情」却看不到甘特图。
+      window.setTimeout(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
     } catch (e) {
       setErr(errMessage(e));
+    }
+  }
+
+  async function openRun(run: RunRow) {
+    await openRunById(run.id);
+  }
+
+  // 启动 run 后立即打开详情：后台线程逐步推进，事件到达会自动刷新详情，甘特图色带逐条长出。
+  async function runAndOpen(start: () => Promise<{ runId: string }>) {
+    setBusy("启动");
+    setErr("");
+    try {
+      const { runId } = await start();
+      await openRunById(runId);
+      await refresh();
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy("");
     }
   }
 
@@ -271,6 +293,8 @@ export default function App() {
                 </div>
               ))}
             </div>
+            <details className="stats-fold">
+              <summary>统计明细（按 SOP / 按风险，点击展开）</summary>
             <h3>按 SOP 聚合（累计）</h3>
             <table className="board-table">
               <thead><tr><th>SOP</th><th>总</th><th>完成</th><th>等人工</th><th>失败</th></tr></thead>
@@ -296,6 +320,7 @@ export default function App() {
               </tbody>
             </table>
             <p className="sub-row" style={{ marginTop: 10 }}>{data.board.scopeNote}</p>
+            </details>
           </section>
 
           <section className="card">
@@ -316,8 +341,8 @@ export default function App() {
                     <span>{s.id}</span>
                   </div>
                   <div className="row actions">
-                    <button disabled={!!busy} onClick={() => act("手动", () => runStart(s.id))}>手动运行</button>
-                    <button disabled={!!busy} onClick={() => act("agent", () => runAsAgent(s.id))}>以 agent 跑一次</button>
+                    <button disabled={!!busy} onClick={() => runAndOpen(() => runStart(s.id))}>手动运行</button>
+                    <button disabled={!!busy} onClick={() => runAndOpen(() => runAsAgent(s.id))}>以 agent 跑一次</button>
                     <button disabled={!!busy} onClick={() => act("启停", () => sopSetEnabled(s.id, !s.enabled))}>
                       {s.enabled ? "停用" : "启用"}
                     </button>
@@ -426,7 +451,7 @@ export default function App() {
           </section>
 
           {detail && (
-            <section className="card" data-testid="run-detail">
+            <section className="card" data-testid="run-detail" ref={detailRef}>
               <div className="row">
                 <h2>运行详情</h2>
                 <button className="close" onClick={() => { setDetail(null); detailRunIdRef.current = null; }}>关闭</button>

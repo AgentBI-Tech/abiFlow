@@ -121,14 +121,14 @@ fn owner_review_gate(
 }
 
 /// 启动一条 run：固定定义快照 + 建 step 行 + 进入 running 并推进。
-pub fn start_run(
+/// 只创建 run（落库 + 建 step 行 + status=running），**不推进**。
+/// 命令层用它先返回 runId，再由 runner::spawn_run 在后台线程里 advance。
+pub fn create_run(
     conn: &Connection,
     sop_id: &str,
     mode: &str,
     trigger_by: &str,
     input: &Value,
-    tools: &dyn ToolRunner,
-    llm: &dyn LlmProvider,
 ) -> AppResult<String> {
     let sop = store::get_sop(conn, sop_id)?;
     if !sop.enabled {
@@ -170,6 +170,21 @@ pub fn start_run(
     store::update_run_cursor(conn, &run_id, None, &outputs_json, "[]")?;
     store::update_run_status(conn, &run_id, "running", None, None)?;
 
+    Ok(run_id)
+}
+
+/// 同步创建并推进（保留给单测与需要阻塞结果的调用方）。
+/// 命令层的用户触发入口改用 create_run + runner::spawn_run 实现异步可观察推进。
+pub fn start_run(
+    conn: &Connection,
+    sop_id: &str,
+    mode: &str,
+    trigger_by: &str,
+    input: &Value,
+    tools: &dyn ToolRunner,
+    llm: &dyn LlmProvider,
+) -> AppResult<String> {
+    let run_id = create_run(conn, sop_id, mode, trigger_by, input)?;
     advance(conn, &run_id, tools, llm)?;
     Ok(run_id)
 }

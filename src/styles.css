@@ -425,6 +425,11 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 
 /* ---- A. 看板 + 状态机 ---- */
 .state-machine-wrap { margin: 10px 0 14px; padding: 8px 6px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.board-guide { margin: 6px 0 10px; padding: 8px 12px 8px 30px; background: var(--brand-soft); border-radius: var(--radius-sm); font-size: var(--fs-sm); color: var(--text-dim); }
+.board-guide li { margin: 2px 0; }
+.board-guide b { color: var(--brand-deep); }
+.stats-fold { margin-top: 10px; }
+.stats-fold summary { cursor: pointer; font-size: var(--fs-sm); font-weight: 600; color: var(--text-dim); }
 .board-cols { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .board-col { min-width: 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; }
 .board-col-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-sm); font-weight: 600; color: var(--text-dim); margin-bottom: 8px; }

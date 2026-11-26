@@ -13,7 +13,7 @@ use crate::domain::template_reuse;
 use crate::domain::gateway::Mode;
 use crate::domain::scheduler;
 use crate::domain::sop::SopDefinition;
-use crate::infra::{app_config, db, store, template_zip, tool_engine::ToolEngine};
+use crate::infra::{app_config, db, runner, store, template_zip, tool_engine::ToolEngine};
 use crate::models::{
     now_secs, AppError, AppResult, DashboardData, GateDecidePayload, GateRow, RunArbitratePayload,
     RunControlPayload, RunDetail, RunRow, RunStartPayload, RunStartResult, ScheduleSetPayload, SchedulerTickResult,
@@ -151,17 +151,16 @@ pub fn run_start(
     payload: RunStartPayload,
 ) -> AppResult<RunStartResult> {
     let conn = open_db(&app)?;
-    let engine = ToolEngine::new(ks.0.clone());
     let mode = payload.mode.as_deref().unwrap_or("build");
-    let run_id = executor::start_run(
+    // 同步只落库创建 run，立即返回 runId；推进交给后台线程，前端可盯着甘特图看色带渐长。
+    let run_id = executor::create_run(
         &conn,
         &payload.sop_id,
         mode,
         "manual",
         payload.input.as_ref().unwrap_or(&json!({})),
-        &engine,
-        llmst.0.as_ref(),
     )?;
+    runner::spawn_run(db_path(&app)?, run_id.clone(), ks.0.clone(), llmst.0.clone());
     Ok(RunStartResult { run_id })
 }
 
@@ -212,8 +211,13 @@ pub fn run_retry(
     payload: RunControlPayload,
 ) -> AppResult<String> {
     let conn = open_db(&app)?;
-    let engine = ToolEngine::new(ks.0.clone());
-    executor::retry_rejected(&conn, &payload.run_id, &engine, llmst.0.as_ref())
+    // 同步预检合法性（runner 内会再校验一次，幂等安全）；推进交给后台线程。
+    let run = store::get_run(&conn, &payload.run_id)?;
+    if run.status != "rejected" || run.reject_count >= 2 {
+        return Err(AppError::InvalidInput(format!("run {} 不可重试", payload.run_id)));
+    }
+    runner::spawn_retry(db_path(&app)?, payload.run_id.clone(), ks.0.clone(), llmst.0.clone());
+    Ok("running".into())
 }
 
 /// 人工仲裁（review 状态）：resume 放行重跑 / fail 判失败。
@@ -225,11 +229,24 @@ pub fn run_arbitrate(
     payload: RunArbitratePayload,
 ) -> AppResult<String> {
     let conn = open_db(&app)?;
-    let engine = ToolEngine::new(ks.0.clone());
-    executor::arbitrate(
-        &conn, &payload.run_id, &payload.decision, payload.note.as_deref(),
-        &engine, llmst.0.as_ref(),
-    )
+    let run = store::get_run(&conn, &payload.run_id)?;
+    if run.status != "rejected" || run.reject_count < 2 {
+        return Err(AppError::InvalidInput(format!("run {} 不可仲裁", payload.run_id)));
+    }
+    if payload.decision == "fail" {
+        // fail 分支是纯终态写入、无长耗时，保持同步以便立即返回结果。
+        let engine = ToolEngine::new(ks.0.clone());
+        return executor::arbitrate(
+            &conn, &payload.run_id, &payload.decision, payload.note.as_deref(),
+            &engine, llmst.0.as_ref(),
+        );
+    }
+    // resume 分支后台重跑，前端可观察；runner 内会再校验一次。
+    runner::spawn_arbitrate(
+        db_path(&app)?, payload.run_id.clone(), payload.decision.clone(),
+        payload.note.clone(), ks.0.clone(), llmst.0.clone(),
+    );
+    Ok("running".into())
 }
 
 // ---- Gate ----
@@ -248,7 +265,6 @@ pub fn gate_decide(
     payload: GateDecidePayload,
 ) -> AppResult<()> {
     let conn = open_db(&app)?;
-    let engine = ToolEngine::new(ks.0.clone());
     let gate = store::get_gate(&conn, &payload.gate_id)?;
     if gate.decided_at.is_some() {
         return Err(AppError::InvalidInput("人工门已裁决".into()));
@@ -265,7 +281,8 @@ pub fn gate_decide(
             store::update_run_status(&conn, &gate.run_id, "failed", Some(verdict), Some("人工驳回/取消"))?;
         }
         _ => {
-            executor::resume_after_gate(&conn, &gate.run_id, &engine, llmst.0.as_ref())?;
+            // 裁决已同步落库，放行后的推进交给后台线程，前端可观察色带继续长出。
+            runner::spawn_resume(db_path(&app)?, gate.run_id.clone(), ks.0.clone(), llmst.0.clone());
         }
     }
     Ok(())
@@ -685,8 +702,8 @@ pub fn run_as_agent(
     sop_id: String,
 ) -> AppResult<RunStartResult> {
     let conn = open_db(&app)?;
-    let engine = ToolEngine::new(ks.0.clone());
-    let run_id = executor::start_run(&conn, &sop_id, "build", "scheduler", &json!({}), &engine, llmst.0.as_ref())?;
+    let run_id = executor::create_run(&conn, &sop_id, "build", "scheduler", &json!({}))?;
+    runner::spawn_run(db_path(&app)?, run_id.clone(), ks.0.clone(), llmst.0.clone());
     Ok(RunStartResult { run_id })
 }
 
