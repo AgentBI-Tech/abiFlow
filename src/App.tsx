@@ -502,10 +502,50 @@ export default function App() {
                   </div>
                 </div>
               )}
+              {/* 待裁决人工门：在详情里直接批准/驳回，不必跳到「人工待办」翻找。 */}
+              {(() => {
+                const pending = detail.gates.filter((g) => g.decidedAt === null);
+                if (!pending.length) return null;
+                const reasonZh: Record<string, string> = {
+                  anomaly_review: "异常清单审核", pause: "暂停确认", takeover: "人工接管确认",
+                  acceptance: "验收确认",
+                };
+                return (
+                  <div className="stack" data-testid="gate-approve-box">
+                    <h3>待你处理 · {pending.length} 个人工门</h3>
+                    <p className="sub-row">危险操作（退款 / 补发 / 补偿）必须在这里由人确认；批准或驳回后，流程才会继续。</p>
+                    {pending.map((g) => (
+                      <div className="gate-card" key={g.id} data-gate-id={g.id}>
+                        <div className="row">
+                          <strong>{reasonZh[g.reason] ?? g.reason}</strong>
+                          <span className="ver">步骤 {g.stepId}</span>
+                        </div>
+                        <p className="sub-row">{g.prompt}</p>
+                        <div className="row actions">
+                          <button disabled={!!busy} data-gate-action="approve"
+                            onClick={() => act("批准", async () => {
+                              await gateDecide(g.id, "approve", arbNote || undefined);
+                              setDetail(await runGet(detail.run.id));
+                            })}>批准通过</button>
+                          <button disabled={!!busy} data-gate-action="reject"
+                            onClick={() => act("驳回", async () => {
+                              await gateDecide(g.id, "reject", arbNote || undefined);
+                              setDetail(await runGet(detail.run.id));
+                            })}>驳回</button>
+                        </div>
+                      </div>
+                    ))}
+                    <label className="stack">
+                      批准 / 驳回说明（可选，留痕）
+                      <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
+                    </label>
+                  </div>
+                );
+              })()}
               {!["done", "failed", "cancelled"].includes(detail.run.status) && (
                 <div className="stack" data-testid="control-box">
                   <h3>人工干预（保留上下文）</h3>
-                  <p className="sub-row">暂停/恢复只放行「暂停门」，不绕过真实人工门；接管把当前步交给人工；改路径只改本次 run 的剩余节点。</p>
+                  <p className="sub-row">接管把当前步交给人工；改路径只改本次 run 的剩余节点。暂停 / 恢复只放行「暂停门」，不绕过真实人工门——真实人工门请在上方批准。</p>
                   <label className="stack">
                     改路径目标节点 id（当前步骤见上方步骤列表）
                     <input value={pathTarget} onChange={(e) => setPathTarget(e.target.value)} placeholder="如 n3" />
@@ -514,9 +554,16 @@ export default function App() {
                     {["running", "pending"].includes(detail.run.status) && (
                       <button disabled={!!busy} onClick={() => act("暂停", async () => { await runControl(detail.run.id, "pause"); setDetail(await runGet(detail.run.id)); })}>暂停</button>
                     )}
-                    {detail.run.status === "wait_human" && (
-                      <button disabled={!!busy} onClick={() => act("恢复", async () => { await runControl(detail.run.id, "resume", undefined, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>恢复</button>
-                    )}
+                    {detail.run.status === "wait_human" &&
+                      (() => {
+                        const pending = detail.gates.filter((g) => g.decidedAt === null);
+                        const onlyPause = pending.length === 0 || pending.every((g) => g.reason === "pause");
+                        return onlyPause ? (
+                          <button disabled={!!busy} onClick={() => act("恢复", async () => { await runControl(detail.run.id, "resume", undefined, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>恢复（暂停门）</button>
+                        ) : (
+                          <span className="sub-row">有真实人工门待批准，「恢复」不可用——请在上方批准。</span>
+                        );
+                      })()}
                     <button disabled={!!busy} onClick={() => act("接管", async () => { await runControl(detail.run.id, "takeover", undefined, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>接管当前步</button>
                     <button disabled={!!busy} onClick={() => act("改路径", async () => { await runControl(detail.run.id, "change_path", pathTarget, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>改路径</button>
                   </div>
