@@ -549,3 +549,80 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 
 /* 看板列头：状态 pill 配色 */
 .board-col-head .board-col-count { font-size: var(--fs-xs); }
+
+/* ============================================================
+   运营看板重排（2026-11-27）：左上视图切换 / 右上日期统计 + SOP 下拉 / 内容区
+   ============================================================ */
+.board-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  flex-wrap: wrap; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+}
+.board-header-left, .board-header-right { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); }
+.board-header-right { justify-content: flex-end; }
+.board-view-switch {
+  display: flex; align-items: center; gap: 4px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 3px; background: var(--panel-2);
+}
+.board-view-switch .tab {
+  border: none; border-radius: 6px; padding: 6px 12px;
+  font-size: var(--fs-sm); background: transparent; color: var(--text-dim);
+}
+.board-view-switch .tab:hover { background: var(--panel); color: var(--text); }
+.board-view-switch .tab.on, .app-content .board-view-switch .tab.on {
+  background: var(--panel); color: var(--brand-deep); box-shadow: var(--shadow);
+}
+
+.board-stats { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.stat-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-sm); color: var(--text-dim);
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 12px;
+}
+.stat-pill strong { font-size: var(--fs-md); color: var(--text); font-variant-numeric: tabular-nums; }
+.stat-pill.doing strong { color: var(--brand-deep); }
+.stat-pill.done strong { color: var(--ok); }
+.stat-pill.todo strong { color: var(--text-dim); }
+
+.sop-picker { position: relative; }
+.sop-picker-btn { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); padding: 7px 12px; }
+.sop-picker-btn svg { opacity: .7; transition: transform .2s ease; }
+.sop-picker-btn[aria-expanded="true"] svg { transform: rotate(180deg); }
+.sop-picker-away { position: fixed; inset: 0; z-index: 20; }
+.sop-picker-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 21;
+  width: 420px; max-width: calc(100vw - 48px); max-height: 70vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .18);
+  padding: var(--sp-3);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(-8px) scale(.98); transform-origin: top right;
+  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+}
+.sop-picker-menu.open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); }
+.sop-picker-filters {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding-bottom: var(--sp-2); border-bottom: 1px solid var(--border); margin-bottom: var(--sp-2);
+}
+.sop-picker-filters label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-dim); }
+.sop-picker-filters input[type="date"] { width: auto; padding: 4px 6px; font-size: var(--fs-xs); }
+.sop-picker-list { max-height: 46vh; overflow-y: auto; }
+.sop-picker-item { padding: var(--sp-2) 0; }
+.sop-picker-item.on { background: var(--brand-soft); border-radius: var(--radius-sm); padding-left: var(--sp-2); padding-right: var(--sp-2); }
+.sop-picker-select {
+  background: transparent; border: none; box-shadow: none;
+  padding: 2px 0; color: var(--text); font-size: var(--fs-base);
+}
+.sop-picker-select:hover { background: transparent; color: var(--brand-deep); }
+.sop-picker-actions { gap: 6px; }
+.sop-picker-actions button, .sop-picker-actions select { font-size: var(--fs-xs); padding: 4px 8px; }
+
+.sop-content { padding: var(--sp-4) var(--sp-5); }
+.sop-content h2 { margin-bottom: 6px; }
+.sop-definition {
+  font-size: var(--fs-base); line-height: 1.7; color: var(--text);
+  margin: 6px 0 10px; white-space: pre-wrap; word-break: break-word;
+}
+.board-gantt-head { margin-bottom: var(--sp-2); }

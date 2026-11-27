@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound, LockKeyhole, PlayCircle,
+  LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound, LockKeyhole, ChevronDown, ChartNoAxesCombined,
 } from "lucide-react";
 import ToolsPanel from "./components/ToolsPanel";
 import ExperiencePanel from "./components/ExperiencePanel";
@@ -23,6 +23,7 @@ import {
   errMessage,
   gateDecide,
   runGet,
+  runList,
   runArbitrate,
   runControl,
   runRetry,
@@ -46,8 +47,8 @@ const VERDICT_ZH: Record<string, string> = { pass: "通过", fail: "未通过", 
 // 侧栏导航项：icon 用 lucide，key 与 tab state 一致。
 const NAV_ITEMS = [
   { key: "board", label: "运营看板", icon: LayoutDashboard },
-  { key: "runs", label: "SOP 与运行", icon: PlayCircle },
-  { key: "canvas", label: "SOP 画布", icon: Workflow },
+  { key: "stats", label: "统计分析", icon: ChartNoAxesCombined },
+  { key: "canvas", label: "自定义 SOP", icon: Workflow },
   { key: "tools", label: "工具与权限", icon: Wrench },
   { key: "custom", label: "自定义工具", icon: Puzzle },
   { key: "experience", label: "经验沉淀", icon: BookOpen },
@@ -60,6 +61,18 @@ function fmtTime(ts: number | null): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false });
 }
+// 本地日期 yyyy-mm-dd，用于运营看板的日期范围过滤（字符串比较即按时间先后）。
+function dayStr(sec: number): string {
+  const d = new Date(sec * 1000);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+function runInRange(r: RunRow, from: string, to: string): boolean {
+  if (r.startedAt == null) return false; // 未开始的 run 没有「开始日期」，不参与按日过滤
+  const d = dayStr(r.startedAt);
+  return (!from || d >= from) && (!to || d <= to);
+}
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -71,15 +84,28 @@ export default function App() {
   const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"board" | "runs" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config" | "user">("board");
+  const [tab, setTab] = useState<"board" | "stats" | "canvas" | "tools" | "custom" | "experience" | "llm" | "config" | "user">("board");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selCanvasSop, setSelCanvasSop] = useState("");
   const [canvasMode, setCanvasMode] = useState<"read" | "edit" | "lane">("edit");
   const [cronDraft, setCronDraft] = useState<Record<string, string>>({});
 
+  // 运营看板：左上视图、右上按日期范围统计 + SOP 下拉选择。
+  const [boardView, setBoardView] = useState<"board" | "gantt" | "lane">("board");
+  const [boardRuns, setBoardRuns] = useState<RunRow[]>([]);
+  const [dateFrom, setDateFrom] = useState(() => dayStr(Date.now() / 1000));
+  const [dateTo, setDateTo] = useState(() => dayStr(Date.now() / 1000));
+  const [selectedSopId, setSelectedSopId] = useState("");
+  const [sopPickerOpen, setSopPickerOpen] = useState(false);
+  const [ganttRunId, setGanttRunId] = useState("");
+  const [ganttDetail, setGanttDetail] = useState<RunDetail | null>(null);
+
   const refresh = useCallback(async () => {
     try {
-      setData(await dashboardGet());
+      // 运营看板要按日期范围统计，dashboardGet 的 runs 只含最近 30 条；单独拉一批供过滤。
+      const [dash, runs] = await Promise.all([dashboardGet(), runList(undefined, undefined, 500)]);
+      setData(dash);
+      setBoardRuns(runs);
       setErr("");
     } catch (e) {
       setErr(errMessage(e));
@@ -165,6 +191,28 @@ export default function App() {
       setBusy("");
     }
   }
+
+  // ---- 运营看板派生数据：日期范围 → SOP 列表 / 计数 / 当前视图内容 ----
+  const datedRuns = boardRuns.filter((r) => runInRange(r, dateFrom, dateTo));
+  const datedSopIds = new Set(datedRuns.map((r) => r.sopId));
+  const pickerSops = (data?.sops ?? []).filter((s) => datedSopIds.has(s.id));
+  const activeSopId = selectedSopId && pickerSops.some((s) => s.id === selectedSopId)
+    ? selectedSopId : (pickerSops[0]?.id ?? "");
+  const activeSop = pickerSops.find((s) => s.id === activeSopId) ?? null;
+  const scopedRuns = activeSopId ? datedRuns.filter((r) => r.sopId === activeSopId) : datedRuns;
+  const countDoing = scopedRuns.filter((r) => r.status === "running" || r.status === "wait_human").length;
+  const countDone = scopedRuns.filter((r) => r.status === "done").length;
+  const countTodo = scopedRuns.filter((r) => r.status === "pending").length;
+  // 甘特/泳道视图展示当前 SOP 在日期范围内的一条 run；用户可在视图内切换。
+  const activeGanttId = ganttRunId && scopedRuns.some((r) => r.id === ganttRunId)
+    ? ganttRunId : (scopedRuns[0]?.id ?? "");
+
+  useEffect(() => {
+    if (!activeGanttId) { setGanttDetail(null); return; }
+    let alive = true;
+    void runGet(activeGanttId).then((d) => { if (alive) setGanttDetail(d); }).catch(() => { if (alive) setGanttDetail(null); });
+    return () => { alive = false; };
+  }, [activeGanttId]);
 
   return (
     <div className="app-root" data-app="abiflow">
@@ -278,8 +326,130 @@ export default function App() {
 
           {tab === "board" && (
           <>
-          <BoardPanel runs={data.runs} onOpen={openRun} activeStatus={detail?.run.status ?? null} />
+          <section className="card board-header" data-testid="board-header">
+            <div className="board-header-left">
+              <div className="board-view-switch" role="tablist" aria-label="看板视图">
+                <button className={boardView === "board" ? "tab on" : "tab"} onClick={() => setBoardView("board")}>看板·状态机</button>
+                <button className={boardView === "gantt" ? "tab on" : "tab"} onClick={() => setBoardView("gantt")}>时间·甘特图</button>
+                <button className={boardView === "lane" ? "tab on" : "tab"} onClick={() => setBoardView("lane")}>泳道图</button>
+              </div>
+            </div>
+            <div className="board-header-right">
+              <div className="board-stats" data-testid="board-stats">
+                <span className="stat-pill doing">正在运行 <strong>{countDoing}</strong></span>
+                <span className="stat-pill done">已完成 <strong>{countDone}</strong></span>
+                <span className="stat-pill todo">待办 <strong>{countTodo}</strong></span>
+              </div>
+              <div className="sop-picker" data-testid="sop-picker">
+                <button className="sop-picker-btn" onClick={() => setSopPickerOpen((o) => !o)} aria-expanded={sopPickerOpen}>
+                  {activeSop ? `${activeSop.name} · v${activeSop.version}` : "选择 SOP"}<ChevronDown size={14} />
+                </button>
+                {sopPickerOpen && <div className="sop-picker-away" onClick={() => setSopPickerOpen(false)} />}
+                <div className={`sop-picker-menu${sopPickerOpen ? " open" : ""}`} data-sop-menu="1">
+                  <div className="sop-picker-filters">
+                    <label>起<input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
+                    <label>止<input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
+                    <button disabled={!!busy} onClick={() => act("刷新", refresh)}>刷新</button>
+                  </div>
+                  {pickerSops.length === 0 ? (
+                    <p className="empty">该日期范围内没有运行记录，换个日期试试。</p>
+                  ) : (
+                    <ul className="list sop-picker-list">
+                      {pickerSops.map((s) => {
+                        const sched = data.schedules.find((x) => x.sopId === s.id);
+                        return (
+                          <li key={s.id} className={`sop-picker-item${s.id === activeSopId ? " on" : ""}`} data-sop-id={s.id}>
+                            <button
+                              className="sop-picker-select"
+                              onClick={() => { setSelectedSopId(s.id); setGanttRunId(""); setSopPickerOpen(false); }}
+                            >
+                              <strong>{s.name}</strong> <span className="ver">v{s.version}</span>
+                            </button>
+                            <div className="row actions sop-picker-actions">
+                              <button disabled={!!busy} onClick={() => runAndOpen(() => runStart(s.id))}>手动运行</button>
+                              <button disabled={!!busy} onClick={() => runAndOpen(() => runAsAgent(s.id))}>以 agent 跑</button>
+                              <button disabled={!!busy} onClick={() => act("启停", () => sopSetEnabled(s.id, !s.enabled))}>
+                                {s.enabled ? "停用" : "启用"}
+                              </button>
+                              {sched ? (
+                                <button disabled={!!busy} onClick={() => act("停自动", () => scheduleSet(s.id, false, 0, null))}>停自动</button>
+                              ) : (
+                                <select
+                                  disabled={!!busy}
+                                  value="0"
+                                  onChange={(e) => { if (e.target.value !== "0") void act("设自动", () => scheduleSet(s.id, true, Number(e.target.value), null)); }}
+                                >
+                                  <option value="0">设自动</option>
+                                  <option value="600">10 分钟</option>
+                                  <option value="1800">30 分钟</option>
+                                  <option value="3600">1 小时</option>
+                                  <option value="86400">1 天</option>
+                                </select>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
 
+          <section className="card sop-content" data-testid="sop-content">
+            {activeSop ? (
+              <>
+                <h2>{activeSop.name} <span className="ver">v{activeSop.version}</span></h2>
+                <p className="sop-definition">{activeSop.definition || "（暂无详细说明）"}</p>
+                <div className="row sub-row">
+                  <span>风险：{activeSop.risk}</span>
+                  <span>归属：{activeSop.ownerPolicy}</span>
+                  <span>统计范围：{dateFrom || "不限"} ~ {dateTo || "不限"} · {activeSop.name}</span>
+                </div>
+              </>
+            ) : (
+              <p className="empty">该日期范围内暂无可展示的 SOP，试试放宽日期或从右上角选择。</p>
+            )}
+          </section>
+
+          {boardView === "board" && (
+            <BoardPanel runs={scopedRuns} onOpen={openRun} activeStatus={detail?.run.status ?? null} />
+          )}
+          {boardView === "gantt" && (
+            <section className="card" data-testid="board-gantt">
+              {scopedRuns.length === 0 ? (
+                <p className="empty">该日期范围内没有运行记录。</p>
+              ) : (
+                <>
+                  <div className="row board-gantt-head">
+                    <label>查看运行
+                      <select value={activeGanttId} onChange={(e) => setGanttRunId(e.target.value)}>
+                        {scopedRuns.map((r) => (
+                          <option key={r.id} value={r.id}>{dayStr(r.startedAt ?? 0)} · {STATUS_ZH[r.status] ?? r.status}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {ganttDetail && ganttDetail.run.id === activeGanttId
+                    ? <RunGantt detail={ganttDetail} />
+                    : <p className="empty">加载运行详情…</p>}
+                </>
+              )}
+            </section>
+          )}
+          {boardView === "lane" && (
+            <section className="card" data-testid="board-lane">
+              {activeSop
+                ? <SopLaneCanvas sop={activeSop} steps={ganttDetail && ganttDetail.run.sopId === activeSop.id ? ganttDetail.steps : []} />
+                : <p className="empty">先选一条 SOP。</p>}
+            </section>
+          )}
+          </>
+          )}
+
+          {tab === "stats" && (
+          <>
           <section className="card" data-testid="board-summary">
             <h2>完成度看板</h2>
             <div className="row board-periods">
@@ -325,76 +495,43 @@ export default function App() {
             <p className="sub-row" style={{ marginTop: 10 }}>{data.board.scopeNote}</p>
             </details>
           </section>
-          </>
-          )}
 
-          {tab === "runs" && (
-          <>
           <section className="card">
-            <h2>SOP 列表</h2>
+            <h2>SOP 调度（cron）</h2>
+            <p className="sub-row">运行按钮已放到运营看板右上角的 SOP 下拉里；这里保留 cron 与下次运行时间设置。</p>
             <ul className="list">
               {data.sops.map((s) => {
                 const sched = data.schedules.find((x) => x.sopId === s.id);
                 return (
-                <li key={s.id} data-testid="sop-item">
-                  <div className="row">
-                    <strong>{s.name}</strong>
-                    <span className={`pill ${s.enabled ? "on" : "off"}`}>{s.enabled ? "启用" : "停用"}</span>
-                    <span className="ver">v{s.version}</span>
-                  </div>
-                  <div className="row sub-row">
-                    <span>风险：{s.risk}</span>
-                    <span>归属：{s.ownerPolicy}</span>
-                    <span>{s.id}</span>
-                  </div>
-                  <div className="row actions">
-                    <button disabled={!!busy} onClick={() => runAndOpen(() => runStart(s.id))}>手动运行</button>
-                    <button disabled={!!busy} onClick={() => runAndOpen(() => runAsAgent(s.id))}>以 agent 跑一次</button>
-                    <button disabled={!!busy} onClick={() => act("启停", () => sopSetEnabled(s.id, !s.enabled))}>
-                      {s.enabled ? "停用" : "启用"}
-                    </button>
-                  </div>
-                  <div className="row actions sched">
-                    <span className={`pill ${sched ? "on" : "off"}`}>{sched ? "自动运行中" : "未设自动"}</span>
-                    {sched?.cronExpr ? (
-                      <span className="pill on" data-cron-expr={sched.cronExpr}>cron {sched.cronExpr}</span>
-                    ) : null}
-                  </div>
-                  <div className="row actions sched">
-                    <label>间隔
-                      <select
-                        value={sched && !sched.cronExpr ? String(sched.intervalSecs) : "0"}
-                        disabled={!!busy}
-                        onChange={(e) => act("设置间隔", () => scheduleSet(s.id, true, Number(e.target.value), null))}
-                      >
-                        <option value="0" disabled>选择间隔</option>
-                        <option value="600">10 分钟</option>
-                        <option value="1800">30 分钟</option>
-                        <option value="3600">1 小时</option>
-                        <option value="86400">1 天</option>
-                      </select>
-                    </label>
-                    <label>cron（分 时 日 月 周，如 0 9 * * *）
-                      <input
-                        className="cron-input"
-                        placeholder="0 9 * * *"
-                        value={cronDraft[s.id] ?? sched?.cronExpr ?? ""}
-                        disabled={!!busy}
-                        onChange={(e) => setCronDraft((d) => ({ ...d, [s.id]: e.target.value }))}
-                      />
-                    </label>
-                    <button
-                      disabled={!!busy || !(cronDraft[s.id] ?? sched?.cronExpr ?? "").trim()}
-                      onClick={() => act("设置 cron", () => scheduleSet(s.id, true, 0, (cronDraft[s.id] ?? "").trim()))}
-                    >用 cron</button>
+                  <li key={s.id}>
+                    <div className="row">
+                      <strong>{s.name}</strong><span className="ver">v{s.version}</span>
+                      {sched ? (
+                        <span className="pill on" data-cron-expr={sched.cronExpr}>cron {sched.cronExpr ?? "—"}</span>
+                      ) : <span className="pill off">未设自动</span>}
+                    </div>
+                    <div className="row actions sched">
+                      <label>cron（分 时 日 月 周）
+                        <input
+                          className="cron-input"
+                          placeholder="0 9 * * *"
+                          value={cronDraft[s.id] ?? sched?.cronExpr ?? ""}
+                          disabled={!!busy}
+                          onChange={(e) => setCronDraft((d) => ({ ...d, [s.id]: e.target.value }))}
+                        />
+                      </label>
+                      <button
+                        disabled={!!busy || !(cronDraft[s.id] ?? sched?.cronExpr ?? "").trim()}
+                        onClick={() => act("设置 cron", () => scheduleSet(s.id, true, 0, (cronDraft[s.id] ?? "").trim()))}
+                      >用 cron</button>
+                      {sched ? (
+                        <button disabled={!!busy} onClick={() => act("停调度", () => scheduleSet(s.id, false, 0, null))}>停自动</button>
+                      ) : null}
+                    </div>
                     {sched ? (
-                      <button disabled={!!busy} onClick={() => act("停调度", () => scheduleSet(s.id, false, 0, null))}>停自动</button>
+                      <div className="row sub-row"><span>下次 {fmtTime(sched.nextRunAt)} · {sched.cronExpr ? "按本地时区对齐" : "固定间隔"}</span></div>
                     ) : null}
-                  </div>
-                  {sched ? (
-                    <div className="row sub-row"><span>下次 {fmtTime(sched.nextRunAt)} · {sched.cronExpr ? "按本地时区对齐" : "固定间隔"}</span></div>
-                  ) : null}
-                </li>
+                  </li>
                 );
               })}
             </ul>
