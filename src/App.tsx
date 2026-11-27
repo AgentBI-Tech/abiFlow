@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   LayoutDashboard, Workflow, Wrench, Puzzle, BookOpen, Sparkles, Settings2, LogIn, UserRound, LockKeyhole, ChevronDown, ChartNoAxesCombined,
@@ -99,8 +99,9 @@ export default function App() {
   const [ganttDetail, setGanttDetail] = useState<RunDetail | null>(null);
   // 手动指定的 run（手动运行 / 点任务 / pill 下钻）；为空则展示日期范围内最新一条。
   const [targetRunId, setTargetRunId] = useState("");
-  // 右上 pill 下钻："" 未展开 / all / done / failed。
+  // 右上 pill 下钻："" 未展开 / all / done / failed；浮层坐标由点击的 pill 决定。
   const [pillFilter, setPillFilter] = useState<"" | "all" | "done" | "failed">("");
+  const [pillPos, setPillPos] = useState<{ top: number; left: number } | null>(null);
   // 历史分析：子 tab 与查询条件。
   const [historySub, setHistorySub] = useState<"query" | "stats">("query");
   const [historyFrom, setHistoryFrom] = useState(() => dayStr(Date.now() / 1000 - 30 * 86400));
@@ -173,12 +174,22 @@ export default function App() {
     setTab("board");
     setBoardView("gantt");
     setTargetRunId(id);
+    setSopPickerOpen(false);
+    setPillFilter("");
     setErr("");
     window.setTimeout(() => document.querySelector(".app-content")?.scrollTo({ top: 0, behavior: "smooth" }), 60);
   }
 
   function openRun(run: RunRow) {
     focusRun(run.id);
+  }
+
+  // pill 下钻浮层：位置跟随被点的 pill，复用 SOP 下拉的浮层样式。
+  function openPill(e: MouseEvent<HTMLButtonElement>, filter: "all" | "done" | "failed") {
+    if (pillFilter === filter) { setPillFilter(""); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    setPillPos({ top: r.bottom + 8, left: Math.max(8, Math.min(r.left, window.innerWidth - 428)) });
+    setPillFilter(filter);
   }
 
   // 启动 run 后直接切到甘特图：后台线程逐步推进，事件到达会自动刷新详情，色带逐条长出。
@@ -341,11 +352,11 @@ export default function App() {
               <div className="board-stats" data-testid="board-stats">
                 <span className="board-stats-label">运行次数（点击查看任务）</span>
                 <button className={`stat-pill doing${pillFilter === "all" ? " on" : ""}`}
-                  onClick={() => setPillFilter(pillFilter === "all" ? "" : "all")}>运行 <strong>{countRuns}</strong> 次</button>
+                  onClick={(e) => openPill(e, "all")}>运行 <strong>{countRuns}</strong> 次</button>
                 <button className={`stat-pill done${pillFilter === "done" ? " on" : ""}`}
-                  onClick={() => setPillFilter(pillFilter === "done" ? "" : "done")}>完成 <strong>{countDone}</strong> 次</button>
+                  onClick={(e) => openPill(e, "done")}>完成 <strong>{countDone}</strong> 次</button>
                 <button className={`stat-pill failed${pillFilter === "failed" ? " on" : ""}`}
-                  onClick={() => setPillFilter(pillFilter === "failed" ? "" : "failed")}>失败 <strong>{countFailed}</strong> 次</button>
+                  onClick={(e) => openPill(e, "failed")}>失败 <strong>{countFailed}</strong> 次</button>
               </div>
               <button
                 className="fullscreen-toggle"
@@ -428,30 +439,33 @@ export default function App() {
           </section>
 
           {pillFilter && (
-            <section className="card pill-drill" data-testid="pill-drill">
-              <div className="row">
-                <h2>{pillFilter === "all" ? "全部运行" : pillFilter === "done" ? "完成" : "失败/取消"}任务（{pillRuns.length}）</h2>
-                <button className="pill-drill-close" onClick={() => setPillFilter("")}>收起</button>
+            <>
+              <div className="sop-picker-away" onClick={() => setPillFilter("")} />
+              <div className="sop-picker-menu pill-menu" data-testid="pill-drill" style={{ top: pillPos?.top, left: pillPos?.left }}>
+                <div className="row pill-menu-head">
+                  <strong>{pillFilter === "all" ? "全部运行" : pillFilter === "done" ? "完成" : "失败/取消"}任务（{pillRuns.length}）</strong>
+                  <button className="pill-drill-close" onClick={() => setPillFilter("")}>收起</button>
+                </div>
+                {pillRuns.length === 0 ? (
+                  <p className="empty">该状态下暂无任务。</p>
+                ) : (
+                  <ul className="list sop-picker-list">
+                    {pillRuns.map((r) => (
+                      <li key={r.id} data-testid="pill-task" className="sop-picker-item">
+                        <div className="row">
+                          <strong>{STATUS_ZH[r.status] ?? r.status}</strong>
+                          <span className="ver">{r.sopId}</span>
+                          <span>{dayStr(r.startedAt ?? 0)}</span>
+                        </div>
+                        <div className="row actions">
+                          <button onClick={() => focusRun(r.id)}>查看甘特图</button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              {pillRuns.length === 0 ? (
-                <p className="empty">该状态下暂无任务。</p>
-              ) : (
-                <ul className="list">
-                  {pillRuns.map((r) => (
-                    <li key={r.id} data-testid="pill-task">
-                      <div className="row">
-                        <strong>{STATUS_ZH[r.status] ?? r.status}</strong>
-                        <span className="ver">{r.sopId}</span>
-                        <span>{dayStr(r.startedAt ?? 0)}</span>
-                      </div>
-                      <div className="row actions">
-                        <button onClick={() => { focusRun(r.id); setPillFilter(""); }}>查看甘特图</button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+            </>
           )}
 
           <section className="card sop-content" data-testid="sop-content">
@@ -483,7 +497,44 @@ export default function App() {
                     <h2>运行详情</h2>
                     <span className="ver">{ganttDetail.run.id}</span>
                     <span className="pill">{STATUS_ZH[ganttDetail.run.status] ?? ganttDetail.run.status}</span>
+                    {ganttDetail.gates.some((g) => g.decidedAt === null) && (
+                      <span className="pill off" data-testid="gate-pending-badge">
+                        待你批准 {ganttDetail.gates.filter((g) => g.decidedAt === null).length} 项
+                      </span>
+                    )}
                   </div>
+                  {(() => {
+                    const pending = ganttDetail.gates.filter((g) => g.decidedAt === null);
+                    if (!pending.length) return null;
+                    const reasonZh: Record<string, string> = {
+                      anomaly_review: "异常清单审核", pause: "暂停确认", takeover: "人工接管确认",
+                      acceptance: "验收确认",
+                    };
+                    return (
+                      <div className="stack gantt-action-box gate-top" data-testid="gate-approve-box">
+                        <h3>待你处理 · {pending.length} 个人工门</h3>
+                        <p className="sub-row">危险操作（退款 / 补发 / 补偿）必须在这里由人确认；批准或驳回后，流程才会继续。</p>
+                        {pending.map((g) => (
+                          <div className="gate-card" key={g.id} data-gate-id={g.id}>
+                            <div className="row">
+                              <strong>{reasonZh[g.reason] ?? g.reason}</strong>
+                              <span className="ver">步骤 {g.stepId}</span>
+                            </div>
+                            <p className="sub-row">{g.prompt}</p>
+                            <div className="row actions">
+                              <button disabled={!!busy} data-gate-action="approve"
+                                onClick={() => act("批准", async () => { await gateDecide(g.id, "approve", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>批准通过</button>
+                              <button disabled={!!busy} data-gate-action="reject"
+                                onClick={() => act("驳回", async () => { await gateDecide(g.id, "reject", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>驳回</button>
+                            </div>
+                          </div>
+                        ))}
+                        <label className="stack">批准 / 驳回说明（可选，留痕）
+                          <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
+                        </label>
+                      </div>
+                    );
+                  })()}
                   <RunGantt detail={ganttDetail} />
                   <details className="steps-fold">
                     <summary>步骤明细（{ganttDetail.steps.length}）</summary>
@@ -528,38 +579,6 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                  {(() => {
-                    const pending = ganttDetail.gates.filter((g) => g.decidedAt === null);
-                    if (!pending.length) return null;
-                    const reasonZh: Record<string, string> = {
-                      anomaly_review: "异常清单审核", pause: "暂停确认", takeover: "人工接管确认",
-                      acceptance: "验收确认",
-                    };
-                    return (
-                      <div className="stack gantt-action-box" data-testid="gate-approve-box">
-                        <h3>待你处理 · {pending.length} 个人工门</h3>
-                        <p className="sub-row">危险操作（退款 / 补发 / 补偿）必须在这里由人确认；批准或驳回后，流程才会继续。</p>
-                        {pending.map((g) => (
-                          <div className="gate-card" key={g.id} data-gate-id={g.id}>
-                            <div className="row">
-                              <strong>{reasonZh[g.reason] ?? g.reason}</strong>
-                              <span className="ver">步骤 {g.stepId}</span>
-                            </div>
-                            <p className="sub-row">{g.prompt}</p>
-                            <div className="row actions">
-                              <button disabled={!!busy} data-gate-action="approve"
-                                onClick={() => act("批准", async () => { await gateDecide(g.id, "approve", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>批准通过</button>
-                              <button disabled={!!busy} data-gate-action="reject"
-                                onClick={() => act("驳回", async () => { await gateDecide(g.id, "reject", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>驳回</button>
-                            </div>
-                          </div>
-                        ))}
-                        <label className="stack">批准 / 驳回说明（可选，留痕）
-                          <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
-                        </label>
-                      </div>
-                    );
-                  })()}
                   {!["done", "failed", "cancelled"].includes(ganttDetail.run.status) && (
                     <div className="stack gantt-action-box" data-testid="control-box">
                       <h3>人工干预（保留上下文）</h3>
