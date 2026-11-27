@@ -200,9 +200,10 @@ export default function App() {
     ? selectedSopId : (pickerSops[0]?.id ?? "");
   const activeSop = pickerSops.find((s) => s.id === activeSopId) ?? null;
   const scopedRuns = activeSopId ? datedRuns.filter((r) => r.sopId === activeSopId) : datedRuns;
-  const countDoing = scopedRuns.filter((r) => r.status === "running" || r.status === "wait_human").length;
+  // 右上按「运行次数」计数，避开与下方条目列的 待办/进行中/已完成 重名。
+  const countRuns = scopedRuns.length;
   const countDone = scopedRuns.filter((r) => r.status === "done").length;
-  const countTodo = scopedRuns.filter((r) => r.status === "pending").length;
+  const countFailed = scopedRuns.filter((r) => r.status === "failed" || r.status === "cancelled").length;
   // 甘特/泳道视图默认展示当前 SOP 在日期范围内最新的一条 run。
   const activeGanttId = scopedRuns[0]?.id ?? "";
 
@@ -325,9 +326,10 @@ export default function App() {
             </div>
             <div className="board-header-right">
               <div className="board-stats" data-testid="board-stats">
-                <span className="stat-pill doing">正在运行 <strong>{countDoing}</strong></span>
-                <span className="stat-pill done">已完成 <strong>{countDone}</strong></span>
-                <span className="stat-pill todo">待办 <strong>{countTodo}</strong></span>
+                <span className="board-stats-label">运行次数</span>
+                <span className="stat-pill doing">运行 <strong>{countRuns}</strong> 次</span>
+                <span className="stat-pill done">完成 <strong>{countDone}</strong> 次</span>
+                <span className="stat-pill failed">失败 <strong>{countFailed}</strong> 次</span>
               </div>
               <button
                 className="fullscreen-toggle"
@@ -364,25 +366,31 @@ export default function App() {
                       {pickerSops.map((s) => {
                         const sched = data.schedules.find((x) => x.sopId === s.id);
                         return (
-                          <li key={s.id} className={`sop-picker-item${s.id === activeSopId ? " on" : ""}`} data-sop-id={s.id}>
-                            <button
-                              className="sop-picker-select"
-                              onClick={() => { setSelectedSopId(s.id); setSopPickerOpen(false); }}
-                            >
+                          <li
+                            key={s.id}
+                            className={`sop-picker-item${s.id === activeSopId ? " on" : ""}`}
+                            data-sop-id={s.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => { setSelectedSopId(s.id); setSopPickerOpen(false); }}
+                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { setSelectedSopId(s.id); setSopPickerOpen(false); } }}
+                          >
+                            <div className="sop-picker-select">
                               <strong>{s.name}</strong> <span className="ver">v{s.version}</span>
-                            </button>
+                            </div>
                             <div className="row actions sop-picker-actions">
-                              <button disabled={!!busy} onClick={() => runAndOpen(() => runStart(s.id))}>手动运行</button>
-                              <button disabled={!!busy} onClick={() => runAndOpen(() => runAsAgent(s.id))}>以 agent 跑</button>
-                              <button disabled={!!busy} onClick={() => act("启停", () => sopSetEnabled(s.id, !s.enabled))}>
+                              <button disabled={!!busy} onClick={(e) => { e.stopPropagation(); void runAndOpen(() => runStart(s.id)); }}>手动运行</button>
+                              <button disabled={!!busy} onClick={(e) => { e.stopPropagation(); void runAndOpen(() => runAsAgent(s.id)); }}>以 agent 跑</button>
+                              <button disabled={!!busy} onClick={(e) => { e.stopPropagation(); void act("启停", () => sopSetEnabled(s.id, !s.enabled)); }}>
                                 {s.enabled ? "停用" : "启用"}
                               </button>
                               {sched ? (
-                                <button disabled={!!busy} onClick={() => act("停自动", () => scheduleSet(s.id, false, 0, null))}>停自动</button>
+                                <button disabled={!!busy} onClick={(e) => { e.stopPropagation(); void act("停自动", () => scheduleSet(s.id, false, 0, null)); }}>停自动</button>
                               ) : (
                                 <select
                                   disabled={!!busy}
                                   value="0"
+                                  onClick={(e) => e.stopPropagation()}
                                   onChange={(e) => { if (e.target.value !== "0") void act("设自动", () => scheduleSet(s.id, true, Number(e.target.value), null)); }}
                                 >
                                   <option value="0">设自动</option>

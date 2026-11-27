@@ -584,7 +584,8 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 .stat-pill strong { font-size: var(--fs-md); color: var(--text); font-variant-numeric: tabular-nums; }
 .stat-pill.doing strong { color: var(--brand-deep); }
 .stat-pill.done strong { color: var(--ok); }
-.stat-pill.todo strong { color: var(--text-dim); }
+.stat-pill.failed strong { color: var(--danger); }
+.board-stats-label { font-size: var(--fs-xs); color: var(--text-dim); letter-spacing: .04em; }
 
 .sop-picker { position: relative; }
 .sop-picker-btn { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); padding: 7px 12px; }
@@ -612,7 +613,8 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 .sop-picker-filters label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-dim); }
 .sop-picker-filters input[type="date"] { width: auto; padding: 4px 6px; font-size: var(--fs-xs); }
 .sop-picker-list { max-height: 46vh; overflow-y: auto; }
-.sop-picker-item { padding: var(--sp-2) 0; }
+.sop-picker-item { padding: var(--sp-2) 0; cursor: pointer; }
+.sop-picker-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .sop-picker-item.on { background: var(--brand-soft); border-radius: var(--radius-sm); padding-left: var(--sp-2); padding-right: var(--sp-2); }
 .sop-picker-select {
   background: transparent; border: none; box-shadow: none;
@@ -653,19 +655,26 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 }
 .react-flow__controls-button:last-child { border-bottom: 0; }
 .react-flow__controls-button:hover { background: var(--brand-soft); }
-.react-flow__controls-button svg { fill: var(--text); }
+/* ReactFlow 默认 svg 在此环境算成 0×0，强制给尺寸让图标可见 */
+.react-flow__controls-button svg {
+  fill: var(--text);
+  width: 14px !important; height: 14px !important;
+  min-width: 14px; min-height: 14px;
+}
 .react-flow__minimap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 
 /* ---- 自定义 SOP 编辑器：对齐运营看板卡片风格 ---- */
+/* 画布随窗口自适应：画布吃满剩余宽度，属性面板固定宽度 */
+.sop-editor-body { display: flex; align-items: stretch; gap: 12px; width: 100%; flex-wrap: nowrap; }
 .sop-editor-canvas {
-  width: 68%; height: 460px;
+  flex: 1 1 auto; min-width: 0; width: auto; height: 460px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--panel-2); overflow: hidden;
 }
 .sop-editor-props {
-  width: 32%; padding: var(--sp-3);
+  flex: 0 0 280px; width: 280px; padding: var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--panel);
+  background: var(--panel); overflow-y: auto;
 }
 .sop-node-card {
   border: 2px solid var(--border); border-radius: var(--radius-sm);

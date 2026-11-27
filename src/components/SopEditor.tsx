@@ -290,9 +290,10 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
         ))}
       </div>
       {err && <p className="err" data-testid="editor-error">{err}</p>}
-      <div className="row" style={{ alignItems: "stretch", gap: 12 }}>
+      <div className="sop-editor-body">
         <div className="sop-editor-canvas">
           <ReactFlow
+            proOptions={{ hideAttribution: true }}
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
