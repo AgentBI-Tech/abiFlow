@@ -590,18 +590,21 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 .sop-picker-btn { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); padding: 7px 12px; }
 .sop-picker-btn svg { opacity: .7; transition: transform .2s ease; }
 .sop-picker-btn[aria-expanded="true"] svg { transform: rotate(180deg); }
-.sop-picker-away { position: fixed; inset: 0; z-index: 20; }
+.sop-picker-away { position: fixed; inset: 0; z-index: 59; }
+/* 用 fixed + 运行时坐标定位，避免被 .app-content 的滚动容器裁剪；条件渲染保证一定可见。 */
 .sop-picker-menu {
-  position: absolute; top: calc(100% + 8px); right: 0; z-index: 21;
+  position: fixed; z-index: 60; right: auto;
   width: 420px; max-width: calc(100vw - 48px); max-height: 70vh; overflow-y: auto;
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: 0 12px 32px rgba(15, 23, 42, .18);
   padding: var(--sp-3);
-  opacity: 0; visibility: hidden; pointer-events: none;
-  transform: translateY(-8px) scale(.98); transform-origin: top right;
-  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+  transform-origin: top right;
+  animation: sop-drop-in .18s ease-out both;
 }
-.sop-picker-menu.open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); }
+@keyframes sop-drop-in {
+  from { opacity: 0; transform: translateY(-10px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 .sop-picker-filters {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding-bottom: var(--sp-2); border-bottom: 1px solid var(--border); margin-bottom: var(--sp-2);
@@ -626,3 +629,52 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
   margin: 6px 0 10px; white-space: pre-wrap; word-break: break-word;
 }
 .board-gantt-head { margin-bottom: var(--sp-2); }
+
+/* ---- 内容区全屏（2026-11-27）：隐藏侧栏与顶栏，内容占满窗口 ---- */
+.fullscreen-toggle {
+  font-size: var(--fs-xs); padding: 5px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel-2); color: var(--text-dim);
+}
+.fullscreen-toggle:hover { background: var(--brand-soft); color: var(--brand-deep); }
+.app-root.content-full .app-topbar,
+.app-root.content-full .app-sidebar { display: none; }
+.app-root.content-full .app-content { padding: 18px 22px 32px; }
+.app-root.content-full .app-lock { left: 0; }
+
+/* ---- ReactFlow 控件：白色图标在浅底上消失，改用主题 token ---- */
+.react-flow__controls {
+  box-shadow: var(--shadow); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); overflow: hidden;
+}
+.react-flow__controls-button {
+  background: var(--panel); color: var(--text);
+  border-bottom: 1px solid var(--border); fill: var(--text);
+}
+.react-flow__controls-button:last-child { border-bottom: 0; }
+.react-flow__controls-button:hover { background: var(--brand-soft); }
+.react-flow__controls-button svg { fill: var(--text); }
+.react-flow__minimap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+
+/* ---- 自定义 SOP 编辑器：对齐运营看板卡片风格 ---- */
+.sop-editor-canvas {
+  width: 68%; height: 460px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel-2); overflow: hidden;
+}
+.sop-editor-props {
+  width: 32%; padding: var(--sp-3);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.sop-node-card {
+  border: 2px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel); overflow: hidden; font-size: var(--fs-base);
+}
+.sop-node-card.selected { box-shadow: 0 0 0 3px var(--brand-soft); }
+.sop-node-head { color: #fff; padding: 4px 8px; font-weight: 600; }
+.sop-node-detail {
+  padding: 5px 8px; color: var(--text-dim);
+  font-family: ui-monospace, monospace; font-size: var(--fs-xs);
+}
+.sop-handle { background: var(--text-dim) !important; width: 8px; height: 8px; }

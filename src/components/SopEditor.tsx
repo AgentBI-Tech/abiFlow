@@ -142,21 +142,15 @@ const SCNode = ({ data, selected }: { data: Record<string, unknown>; selected?: 
   return (
     <div
       data-sop-node={String(data.nodeType)}
-      style={{
-        width: "100%", minHeight: NODE_H, boxSizing: "border-box",
-        border: `2px solid ${selected ? "#0ea5e9" : color}`, borderRadius: 8,
-        background: "#fff", overflow: "hidden", fontSize: 12,
-        boxShadow: selected ? "0 0 0 3px rgba(14,165,233,.25)" : undefined,
-      }}
+      className={`sop-node-card${selected ? " selected" : ""}`}
+      style={{ width: "100%", minHeight: NODE_H, boxSizing: "border-box", borderColor: selected ? "#0ea5e9" : color }}
     >
-      <div style={{ background: color, color: "#fff", padding: "3px 8px", fontWeight: 600 }}>
+      <div className="sop-node-head" style={{ background: color }}>
         {String(data.label ?? "")}
       </div>
-      <div style={{ padding: "4px 8px", color: "#475569", fontFamily: "ui-monospace, monospace" }}>
-        {String(data.detail ?? "") || "—"}
-      </div>
-      <Handle type="target" position={Position.Top} style={{ background: "#94a3b8", width: 8, height: 8 }} />
-      <Handle type="source" position={Position.Bottom} style={{ background: "#94a3b8", width: 8, height: 8 }} />
+      <div className="sop-node-detail">{String(data.detail ?? "") || "—"}</div>
+      <Handle type="target" position={Position.Top} className="sop-handle" />
+      <Handle type="source" position={Position.Bottom} className="sop-handle" />
     </div>
   );
 };
@@ -297,7 +291,7 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
       </div>
       {err && <p className="err" data-testid="editor-error">{err}</p>}
       <div className="row" style={{ alignItems: "stretch", gap: 12 }}>
-        <div style={{ width: "68%", height: 460, border: "1px solid #d4d4d8", borderRadius: 8, background: "#fafafa" }}>
+        <div className="sop-editor-canvas">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -314,7 +308,7 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
             <Controls />
           </ReactFlow>
         </div>
-        <div style={{ width: "32%", border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }} data-testid="prop-panel">
+        <div className="sop-editor-props" data-testid="prop-panel">
           {selNodeObj ? (
             <>
               <h3>{TYPE_LABEL[String((selNodeObj.data as Record<string, unknown>).nodeType)] ?? "节点"} · {selNodeObj.id}</h3>

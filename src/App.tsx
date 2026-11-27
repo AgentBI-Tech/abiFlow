@@ -19,7 +19,6 @@ import abiLogo from "./assets/abilogo.svg";
 import {
   configGet,
   dashboardGet,
-  demoInstall,
   errMessage,
   gateDecide,
   runGet,
@@ -30,7 +29,6 @@ import {
   runStart,
   runAsAgent,
   scheduleSet,
-  schedulerTick,
   sopSetEnabled,
   type DashboardData,
   type RunDetail,
@@ -42,8 +40,6 @@ const STATUS_ZH: Record<string, string> = {
   pending: "待运行", running: "运行中", wait_human: "待人工", rejected: "已打回",
   review: "待仲裁", done: "完成", failed: "失败", cancelled: "已取消",
 };
-const VERDICT_ZH: Record<string, string> = { pass: "通过", fail: "未通过", partial: "部分" };
-
 // 侧栏导航项：icon 用 lucide，key 与 tab state 一致。
 const NAV_ITEMS = [
   { key: "board", label: "运营看板", icon: LayoutDashboard },
@@ -57,10 +53,6 @@ const NAV_ITEMS = [
   { key: "user", label: "用户与权限", icon: UserRound },
 ] as const;
 
-function fmtTime(ts: number | null): string {
-  if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false });
-}
 // 本地日期 yyyy-mm-dd，用于运营看板的日期范围过滤（字符串比较即按时间先后）。
 function dayStr(sec: number): string {
   const d = new Date(sec * 1000);
@@ -72,6 +64,13 @@ function runInRange(r: RunRow, from: string, to: string): boolean {
   if (r.startedAt == null) return false; // 未开始的 run 没有「开始日期」，不参与按日过滤
   const d = dayStr(r.startedAt);
   return (!from || d >= from) && (!to || d <= to);
+}
+// definition 存的是 AST（对象或 JSON 字符串），内容区只给用户看概览，不暴露技术细节。
+function sopNodeCount(def: unknown): number {
+  try {
+    const o = typeof def === "string" ? JSON.parse(def) : def;
+    return Array.isArray((o as { nodes?: unknown })?.nodes) ? (o as { nodes: unknown[] }).nodes.length : 0;
+  } catch { return 0; }
 }
 
 export default function App() {
@@ -88,7 +87,6 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selCanvasSop, setSelCanvasSop] = useState("");
   const [canvasMode, setCanvasMode] = useState<"read" | "edit" | "lane">("edit");
-  const [cronDraft, setCronDraft] = useState<Record<string, string>>({});
 
   // 运营看板：左上视图、右上按日期范围统计 + SOP 下拉选择。
   const [boardView, setBoardView] = useState<"board" | "gantt" | "lane">("board");
@@ -97,7 +95,9 @@ export default function App() {
   const [dateTo, setDateTo] = useState(() => dayStr(Date.now() / 1000));
   const [selectedSopId, setSelectedSopId] = useState("");
   const [sopPickerOpen, setSopPickerOpen] = useState(false);
-  const [ganttRunId, setGanttRunId] = useState("");
+  const [pickerPos, setPickerPos] = useState<{ top: number; left: number } | null>(null);
+  const pickerBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [contentFull, setContentFull] = useState(false);
   const [ganttDetail, setGanttDetail] = useState<RunDetail | null>(null);
 
   const refresh = useCallback(async () => {
@@ -203,9 +203,8 @@ export default function App() {
   const countDoing = scopedRuns.filter((r) => r.status === "running" || r.status === "wait_human").length;
   const countDone = scopedRuns.filter((r) => r.status === "done").length;
   const countTodo = scopedRuns.filter((r) => r.status === "pending").length;
-  // 甘特/泳道视图展示当前 SOP 在日期范围内的一条 run；用户可在视图内切换。
-  const activeGanttId = ganttRunId && scopedRuns.some((r) => r.id === ganttRunId)
-    ? ganttRunId : (scopedRuns[0]?.id ?? "");
+  // 甘特/泳道视图默认展示当前 SOP 在日期范围内最新的一条 run。
+  const activeGanttId = scopedRuns[0]?.id ?? "";
 
   useEffect(() => {
     if (!activeGanttId) { setGanttDetail(null); return; }
@@ -215,7 +214,7 @@ export default function App() {
   }, [activeGanttId]);
 
   return (
-    <div className="app-root" data-app="abiflow">
+    <div className={`app-root${contentFull ? " content-full" : ""}`} data-app="abiflow">
       {/* 顶部导航 bar：logo + 产品名 + 全局状态 */}
       <header className="app-topbar">
         <div className="app-brand">
@@ -306,22 +305,12 @@ export default function App() {
         <ConfigPanel onError={setErr} />
       ) : (
       <>
-      <section className="actions">
-        <button disabled={!!busy} onClick={() => act("安装演示", () => demoInstall())}>
-          安装演示 SOP
-        </button>
-        <button disabled={!!busy} onClick={() => act("手动调度", () => schedulerTick())}>
-          手动调度一次
-        </button>
-        <button disabled={!!busy} onClick={() => act("刷新", refresh)}>刷新</button>
-      </section>
-
       {!data ? (
         <p>加载中…</p>
       ) : (
         <>
           {data.sops.length === 0 && (
-            <section className="card"><p className="empty">还没有 SOP，点「安装演示 SOP」开始。</p></section>
+            <section className="card"><p className="empty">还没有 SOP。</p></section>
           )}
 
           {tab === "board" && (
@@ -340,12 +329,29 @@ export default function App() {
                 <span className="stat-pill done">已完成 <strong>{countDone}</strong></span>
                 <span className="stat-pill todo">待办 <strong>{countTodo}</strong></span>
               </div>
+              <button
+                className="fullscreen-toggle"
+                onClick={() => setContentFull((v) => !v)}
+                title={contentFull ? "退出全屏" : "内容区全屏"}
+              >{contentFull ? "退出全屏" : "全屏"}</button>
               <div className="sop-picker" data-testid="sop-picker">
-                <button className="sop-picker-btn" onClick={() => setSopPickerOpen((o) => !o)} aria-expanded={sopPickerOpen}>
+                <button
+                  ref={pickerBtnRef}
+                  className="sop-picker-btn"
+                  aria-expanded={sopPickerOpen}
+                  onClick={() => {
+                    if (sopPickerOpen) { setSopPickerOpen(false); return; }
+                    const rect = pickerBtnRef.current?.getBoundingClientRect();
+                    setPickerPos(rect
+                      ? { top: rect.bottom + 8, left: Math.max(8, Math.min(rect.left, window.innerWidth - 428)) }
+                      : { top: 120, left: 300 });
+                    setSopPickerOpen(true);
+                  }}
+                >
                   {activeSop ? `${activeSop.name} · v${activeSop.version}` : "选择 SOP"}<ChevronDown size={14} />
                 </button>
                 {sopPickerOpen && <div className="sop-picker-away" onClick={() => setSopPickerOpen(false)} />}
-                <div className={`sop-picker-menu${sopPickerOpen ? " open" : ""}`} data-sop-menu="1">
+                {sopPickerOpen && <div className="sop-picker-menu" data-sop-menu="1" style={{ top: pickerPos?.top, left: pickerPos?.left }}>
                   <div className="sop-picker-filters">
                     <label>起<input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
                     <label>止<input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
@@ -361,7 +367,7 @@ export default function App() {
                           <li key={s.id} className={`sop-picker-item${s.id === activeSopId ? " on" : ""}`} data-sop-id={s.id}>
                             <button
                               className="sop-picker-select"
-                              onClick={() => { setSelectedSopId(s.id); setGanttRunId(""); setSopPickerOpen(false); }}
+                              onClick={() => { setSelectedSopId(s.id); setSopPickerOpen(false); }}
                             >
                               <strong>{s.name}</strong> <span className="ver">v{s.version}</span>
                             </button>
@@ -392,7 +398,7 @@ export default function App() {
                       })}
                     </ul>
                   )}
-                </div>
+                </div>}
               </div>
             </div>
           </section>
@@ -401,10 +407,10 @@ export default function App() {
             {activeSop ? (
               <>
                 <h2>{activeSop.name} <span className="ver">v{activeSop.version}</span></h2>
-                <p className="sop-definition">{activeSop.definition || "（暂无详细说明）"}</p>
+                <p className="sop-definition">
+                  {sopNodeCount(activeSop.definition)} 个节点 · 风险 {activeSop.risk} · 归属 {activeSop.ownerPolicy}
+                </p>
                 <div className="row sub-row">
-                  <span>风险：{activeSop.risk}</span>
-                  <span>归属：{activeSop.ownerPolicy}</span>
                   <span>统计范围：{dateFrom || "不限"} ~ {dateTo || "不限"} · {activeSop.name}</span>
                 </div>
               </>
@@ -422,15 +428,6 @@ export default function App() {
                 <p className="empty">该日期范围内没有运行记录。</p>
               ) : (
                 <>
-                  <div className="row board-gantt-head">
-                    <label>查看运行
-                      <select value={activeGanttId} onChange={(e) => setGanttRunId(e.target.value)}>
-                        {scopedRuns.map((r) => (
-                          <option key={r.id} value={r.id}>{dayStr(r.startedAt ?? 0)} · {STATUS_ZH[r.status] ?? r.status}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
                   {ganttDetail && ganttDetail.run.id === activeGanttId
                     ? <RunGantt detail={ganttDetail} />
                     : <p className="empty">加载运行详情…</p>}
@@ -494,104 +491,6 @@ export default function App() {
             </table>
             <p className="sub-row" style={{ marginTop: 10 }}>{data.board.scopeNote}</p>
             </details>
-          </section>
-
-          <section className="card">
-            <h2>SOP 调度（cron）</h2>
-            <p className="sub-row">运行按钮已放到运营看板右上角的 SOP 下拉里；这里保留 cron 与下次运行时间设置。</p>
-            <ul className="list">
-              {data.sops.map((s) => {
-                const sched = data.schedules.find((x) => x.sopId === s.id);
-                return (
-                  <li key={s.id}>
-                    <div className="row">
-                      <strong>{s.name}</strong><span className="ver">v{s.version}</span>
-                      {sched ? (
-                        <span className="pill on" data-cron-expr={sched.cronExpr}>cron {sched.cronExpr ?? "—"}</span>
-                      ) : <span className="pill off">未设自动</span>}
-                    </div>
-                    <div className="row actions sched">
-                      <label>cron（分 时 日 月 周）
-                        <input
-                          className="cron-input"
-                          placeholder="0 9 * * *"
-                          value={cronDraft[s.id] ?? sched?.cronExpr ?? ""}
-                          disabled={!!busy}
-                          onChange={(e) => setCronDraft((d) => ({ ...d, [s.id]: e.target.value }))}
-                        />
-                      </label>
-                      <button
-                        disabled={!!busy || !(cronDraft[s.id] ?? sched?.cronExpr ?? "").trim()}
-                        onClick={() => act("设置 cron", () => scheduleSet(s.id, true, 0, (cronDraft[s.id] ?? "").trim()))}
-                      >用 cron</button>
-                      {sched ? (
-                        <button disabled={!!busy} onClick={() => act("停调度", () => scheduleSet(s.id, false, 0, null))}>停自动</button>
-                      ) : null}
-                    </div>
-                    {sched ? (
-                      <div className="row sub-row"><span>下次 {fmtTime(sched.nextRunAt)} · {sched.cronExpr ? "按本地时区对齐" : "固定间隔"}</span></div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-
-          <section className="card">
-            <h2>人工待办 <span className="count">{data.pendingGates.length}</span></h2>
-            {data.pendingGates.length === 0 ? (
-              <p className="empty">暂无待人工处理的门。</p>
-            ) : (
-              <ul className="list">
-                {data.pendingGates.map((g) => (
-                  <li key={g.id} data-testid="gate-item">
-                    <p className="gate-prompt">{g.prompt}</p>
-                    <p className="sub-row">原因：{g.reason} · run {g.runId}</p>
-                    <div className="row actions">
-                      <button disabled={!!busy} onClick={() => act("批准", () => gateDecide(g.id, "approve"))}>批准</button>
-                      <button disabled={!!busy} onClick={() => act("驳回", () => gateDecide(g.id, "reject"))}>驳回</button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="card">
-            <h2>运行历史</h2>
-            {data.runs.length === 0 ? (
-              <p className="empty">还没有运行记录。</p>
-            ) : (
-              <ul className="list">
-                {data.runs.map((r) => (
-                  <li key={r.id} data-testid="run-item">
-                    <div className="row">
-                      <strong>{STATUS_ZH[r.status] ?? r.status}</strong>
-                      <span className="pill">{VERDICT_ZH[r.verdict ?? ""] ?? "—"}</span>
-                      <span className="ver">{r.mode} · {r.triggerBy}</span>
-                      {r.rejectCount > 0 && <span className="pill off" data-testid="reject-count">打回 {r.rejectCount}</span>}
-                    </div>
-                    <div className="row sub-row">
-                      <span>开始 {fmtTime(r.startedAt)}</span>
-                      <span>结束 {fmtTime(r.finishedAt)}</span>
-                      <span>{r.sopId}</span>
-                    </div>
-                    <div className="row actions">
-                      <button disabled={!!busy} onClick={() => openRun(r)}>查看详情</button>
-                      {r.status === "rejected" && (
-                        <button disabled={!!busy} onClick={() => act("重试", () => runRetry(r.id))}>重试（第 2 轮）</button>
-                      )}
-                      {r.status === "review" && (
-                        <>
-                          <button disabled={!!busy} onClick={() => act("仲裁放行", () => runArbitrate(r.id, "resume"))}>仲裁放行</button>
-                          <button disabled={!!busy} onClick={() => act("仲裁失败", () => runArbitrate(r.id, "fail"))}>仲裁失败</button>
-                        </>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
           </section>
           </>
           )}
