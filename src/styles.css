@@ -710,6 +710,11 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 .gantt-action-box h3 { margin: 0 0 8px; }
 .board-gantt .steps-fold { margin-top: var(--sp-3); }
 .pill-menu-head { justify-content: space-between; margin-bottom: var(--sp-2); }
+.pill-task { cursor: pointer; }
+.pill-task-name { font-size: var(--fs-base); font-weight: 600; color: var(--text); }
+.pill-task-meta { gap: 12px; margin-top: 3px; font-size: var(--fs-xs); color: var(--text-dim); }
+.pill-task-status { color: var(--brand-deep); font-weight: 600; }
+.pill-task:hover .pill-task-name { color: var(--brand-deep); }
 .pill-menu-head strong { font-size: var(--fs-md); }
 .gate-top {
   border-color: var(--danger); background: var(--danger-soft);

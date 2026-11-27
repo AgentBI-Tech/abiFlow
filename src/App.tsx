@@ -60,6 +60,10 @@ function dayStr(sec: number): string {
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
 }
+function clockStr(sec: number | null): string {
+  if (!sec) return "—";
+  return new Date(sec * 1000).toLocaleTimeString("zh-CN", { hour12: false });
+}
 function runInRange(r: RunRow, from: string, to: string): boolean {
   if (r.startedAt == null) return false; // 未开始的 run 没有「开始日期」，不参与按日过滤
   const d = dayStr(r.startedAt);
@@ -451,14 +455,20 @@ export default function App() {
                 ) : (
                   <ul className="list sop-picker-list">
                     {pillRuns.map((r) => (
-                      <li key={r.id} data-testid="pill-task" className="sop-picker-item">
-                        <div className="row">
-                          <strong>{STATUS_ZH[r.status] ?? r.status}</strong>
-                          <span className="ver">{r.sopId}</span>
-                          <span>{dayStr(r.startedAt ?? 0)}</span>
-                        </div>
-                        <div className="row actions">
-                          <button onClick={() => focusRun(r.id)}>查看甘特图</button>
+                      <li
+                        key={r.id}
+                        data-testid="pill-task"
+                        className="sop-picker-item pill-task"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => focusRun(r.id)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") focusRun(r.id); }}
+                      >
+                        <div className="pill-task-name">{data?.sops.find((s) => s.id === r.sopId)?.name ?? r.sopId}</div>
+                        <div className="row pill-task-meta">
+                          <span className="pill-task-status">{STATUS_ZH[r.status] ?? r.status}</span>
+                          <span>日期 {dayStr(r.startedAt ?? 0)}</span>
+                          <span>时间 {clockStr(r.startedAt)}</span>
                         </div>
                       </li>
                     ))}
