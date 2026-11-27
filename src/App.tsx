@@ -43,7 +43,7 @@ const STATUS_ZH: Record<string, string> = {
 // 侧栏导航项：icon 用 lucide，key 与 tab state 一致。
 const NAV_ITEMS = [
   { key: "board", label: "运营看板", icon: LayoutDashboard },
-  { key: "stats", label: "统计分析", icon: ChartNoAxesCombined },
+  { key: "stats", label: "历史分析", icon: ChartNoAxesCombined },
   { key: "canvas", label: "自定义 SOP", icon: Workflow },
   { key: "tools", label: "工具与权限", icon: Wrench },
   { key: "custom", label: "自定义工具", icon: Puzzle },
@@ -75,10 +75,8 @@ function sopNodeCount(def: unknown): number {
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
-  const [detail, setDetail] = useState<RunDetail | null>(null);
-  // 当前打开的 run id：事件按 payload.runId 判断是否要刷新详情（避免闭包陈旧）。
-  const detailRunIdRef = useRef<string | null>(null);
-  const detailRef = useRef<HTMLElement | null>(null);
+  // 详情统一由内容区甘特图承载，不再用抽屉；事件按 runId 刷新当前展示的 run。
+  const activeRunIdRef = useRef<string | null>(null);
   const [arbNote, setArbNote] = useState("");
   const [pathTarget, setPathTarget] = useState("");
   const [busy, setBusy] = useState("");
@@ -99,6 +97,16 @@ export default function App() {
   const pickerBtnRef = useRef<HTMLButtonElement | null>(null);
   const [contentFull, setContentFull] = useState(false);
   const [ganttDetail, setGanttDetail] = useState<RunDetail | null>(null);
+  // 手动指定的 run（手动运行 / 点任务 / pill 下钻）；为空则展示日期范围内最新一条。
+  const [targetRunId, setTargetRunId] = useState("");
+  // 右上 pill 下钻："" 未展开 / all / done / failed。
+  const [pillFilter, setPillFilter] = useState<"" | "all" | "done" | "failed">("");
+  // 历史分析：子 tab 与查询条件。
+  const [historySub, setHistorySub] = useState<"query" | "stats">("query");
+  const [historyFrom, setHistoryFrom] = useState(() => dayStr(Date.now() / 1000 - 30 * 86400));
+  const [historyTo, setHistoryTo] = useState(() => dayStr(Date.now() / 1000));
+  const [historySop, setHistorySop] = useState("");
+  const [historyStatus, setHistoryStatus] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -136,8 +144,8 @@ export default function App() {
         if (!alive) return;
         void refresh();
         const rid = (e.payload as { runId?: string } | undefined)?.runId;
-        if (rid && rid === detailRunIdRef.current) {
-          void runGet(rid).then((d) => { if (alive) setDetail(d); }).catch(() => {});
+        if (rid && rid === activeRunIdRef.current) {
+          void runGet(rid).then((d) => { if (alive) setGanttDetail(d); }).catch(() => {});
         }
       })
     )).then((fns) => {
@@ -160,30 +168,26 @@ export default function App() {
     }
   }
 
-  async function openRunById(id: string) {
-    try {
-      const d = await runGet(id);
-      setDetail(d);
-      detailRunIdRef.current = d.run.id;
-      setErr("");
-      // 详情渲染在页面底部：打开后滚过去，否则用户点了「查看详情」却看不到甘特图。
-      window.setTimeout(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
-    } catch (e) {
-      setErr(errMessage(e));
-    }
+  // 不弹抽屉：直接切到运营看板的甘特图视图，并定位到指定 run。
+  function focusRun(id: string) {
+    setTab("board");
+    setBoardView("gantt");
+    setTargetRunId(id);
+    setErr("");
+    window.setTimeout(() => document.querySelector(".app-content")?.scrollTo({ top: 0, behavior: "smooth" }), 60);
   }
 
-  async function openRun(run: RunRow) {
-    await openRunById(run.id);
+  function openRun(run: RunRow) {
+    focusRun(run.id);
   }
 
-  // 启动 run 后立即打开详情：后台线程逐步推进，事件到达会自动刷新详情，甘特图色带逐条长出。
+  // 启动 run 后直接切到甘特图：后台线程逐步推进，事件到达会自动刷新详情，色带逐条长出。
   async function runAndOpen(start: () => Promise<{ runId: string }>) {
     setBusy("启动");
     setErr("");
     try {
       const { runId } = await start();
-      await openRunById(runId);
+      focusRun(runId);
       await refresh();
     } catch (e) {
       setErr(errMessage(e));
@@ -204,10 +208,19 @@ export default function App() {
   const countRuns = scopedRuns.length;
   const countDone = scopedRuns.filter((r) => r.status === "done").length;
   const countFailed = scopedRuns.filter((r) => r.status === "failed" || r.status === "cancelled").length;
-  // 甘特/泳道视图默认展示当前 SOP 在日期范围内最新的一条 run。
-  const activeGanttId = scopedRuns[0]?.id ?? "";
+  const pillRuns = scopedRuns.filter((r) =>
+    pillFilter === "all" ? true :
+    pillFilter === "done" ? r.status === "done" :
+    pillFilter === "failed" ? (r.status === "failed" || r.status === "cancelled") : false);
+  const historyRuns = boardRuns.filter((r) =>
+    runInRange(r, historyFrom, historyTo) &&
+    (!historySop || r.sopId === historySop) &&
+    (!historyStatus || r.status === historyStatus));
+  // 甘特/泳道视图：优先展示手动指定的 run，否则展示当前 SOP 在日期范围内最新的一条。
+  const activeGanttId = targetRunId || (scopedRuns[0]?.id ?? "");
 
   useEffect(() => {
+    activeRunIdRef.current = activeGanttId;
     if (!activeGanttId) { setGanttDetail(null); return; }
     let alive = true;
     void runGet(activeGanttId).then((d) => { if (alive) setGanttDetail(d); }).catch(() => { if (alive) setGanttDetail(null); });
@@ -284,11 +297,11 @@ export default function App() {
                 return canvasMode === "edit"
                   ? <SopEditor sop={sop} onSaved={refresh} />
                   : canvasMode === "lane"
-                    ? <SopLaneCanvas sop={sop} steps={detail?.run.sopId === sop.id ? detail.steps : []} />
+                    ? <SopLaneCanvas sop={sop} steps={ganttDetail?.run.sopId === sop.id ? ganttDetail.steps : []} />
                     : <SopCanvas sop={sop} />;
               })()
             ) : (
-              <p className="empty">先选一条 SOP。还没有 SOP 的话，去「运营看板」点「安装演示 SOP」。</p>
+              <p className="empty">先选一条 SOP。</p>
             )}
           </>
         )
@@ -326,10 +339,13 @@ export default function App() {
             </div>
             <div className="board-header-right">
               <div className="board-stats" data-testid="board-stats">
-                <span className="board-stats-label">运行次数</span>
-                <span className="stat-pill doing">运行 <strong>{countRuns}</strong> 次</span>
-                <span className="stat-pill done">完成 <strong>{countDone}</strong> 次</span>
-                <span className="stat-pill failed">失败 <strong>{countFailed}</strong> 次</span>
+                <span className="board-stats-label">运行次数（点击查看任务）</span>
+                <button className={`stat-pill doing${pillFilter === "all" ? " on" : ""}`}
+                  onClick={() => setPillFilter(pillFilter === "all" ? "" : "all")}>运行 <strong>{countRuns}</strong> 次</button>
+                <button className={`stat-pill done${pillFilter === "done" ? " on" : ""}`}
+                  onClick={() => setPillFilter(pillFilter === "done" ? "" : "done")}>完成 <strong>{countDone}</strong> 次</button>
+                <button className={`stat-pill failed${pillFilter === "failed" ? " on" : ""}`}
+                  onClick={() => setPillFilter(pillFilter === "failed" ? "" : "failed")}>失败 <strong>{countFailed}</strong> 次</button>
               </div>
               <button
                 className="fullscreen-toggle"
@@ -372,7 +388,7 @@ export default function App() {
                             data-sop-id={s.id}
                             role="button"
                             tabIndex={0}
-                            onClick={() => { setSelectedSopId(s.id); setSopPickerOpen(false); }}
+                            onClick={() => { setSelectedSopId(s.id); setTargetRunId(""); setSopPickerOpen(false); }}
                             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { setSelectedSopId(s.id); setSopPickerOpen(false); } }}
                           >
                             <div className="sop-picker-select">
@@ -411,6 +427,33 @@ export default function App() {
             </div>
           </section>
 
+          {pillFilter && (
+            <section className="card pill-drill" data-testid="pill-drill">
+              <div className="row">
+                <h2>{pillFilter === "all" ? "全部运行" : pillFilter === "done" ? "完成" : "失败/取消"}任务（{pillRuns.length}）</h2>
+                <button className="pill-drill-close" onClick={() => setPillFilter("")}>收起</button>
+              </div>
+              {pillRuns.length === 0 ? (
+                <p className="empty">该状态下暂无任务。</p>
+              ) : (
+                <ul className="list">
+                  {pillRuns.map((r) => (
+                    <li key={r.id} data-testid="pill-task">
+                      <div className="row">
+                        <strong>{STATUS_ZH[r.status] ?? r.status}</strong>
+                        <span className="ver">{r.sopId}</span>
+                        <span>{dayStr(r.startedAt ?? 0)}</span>
+                      </div>
+                      <div className="row actions">
+                        <button onClick={() => { focusRun(r.id); setPillFilter(""); }}>查看甘特图</button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
           <section className="card sop-content" data-testid="sop-content">
             {activeSop ? (
               <>
@@ -428,17 +471,121 @@ export default function App() {
           </section>
 
           {boardView === "board" && (
-            <BoardPanel runs={scopedRuns} onOpen={openRun} activeStatus={detail?.run.status ?? null} />
+            <BoardPanel runs={scopedRuns} onOpen={openRun} activeStatus={ganttDetail?.run.status ?? null} />
           )}
           {boardView === "gantt" && (
-            <section className="card" data-testid="board-gantt">
-              {scopedRuns.length === 0 ? (
-                <p className="empty">该日期范围内没有运行记录。</p>
+            <section className="card board-gantt" data-testid="board-gantt">
+              {!ganttDetail || ganttDetail.run.id !== activeGanttId ? (
+                <p className="empty">{activeGanttId ? "加载运行详情…" : "该日期范围内没有运行记录。"}</p>
               ) : (
                 <>
-                  {ganttDetail && ganttDetail.run.id === activeGanttId
-                    ? <RunGantt detail={ganttDetail} />
-                    : <p className="empty">加载运行详情…</p>}
+                  <div className="row gantt-detail-head">
+                    <h2>运行详情</h2>
+                    <span className="ver">{ganttDetail.run.id}</span>
+                    <span className="pill">{STATUS_ZH[ganttDetail.run.status] ?? ganttDetail.run.status}</span>
+                  </div>
+                  <RunGantt detail={ganttDetail} />
+                  <details className="steps-fold">
+                    <summary>步骤明细（{ganttDetail.steps.length}）</summary>
+                    <ol className="steps">
+                      {ganttDetail.steps.map((s) => (
+                        <li key={s.id} data-testid="step-item">
+                          <strong>{s.nodeType}</strong> — {s.status}
+                          {s.toolRef && <span className="ver"> · {s.toolRef}</span>}
+                          {s.outputJson && <pre>{s.outputJson}</pre>}
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                  <h3>验收</h3>
+                  <ul className="list">
+                    {ganttDetail.acceptance.map((a) => (
+                      <li key={a.id}>{a.passed ? "✓" : "✗"} {a.criterion}</li>
+                    ))}
+                    {ganttDetail.acceptance.length === 0 && <li className="empty">无验收项</li>}
+                  </ul>
+                  {(ganttDetail.run.status === "rejected" || ganttDetail.run.status === "review") && (
+                    <div className="stack gantt-action-box" data-testid="arbitration-box">
+                      <label className="stack">仲裁/重试说明（可选，留痕）
+                        <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
+                      </label>
+                      <div className="row actions">
+                        {ganttDetail.run.status === "rejected" && (
+                          <button disabled={!!busy} onClick={() => act("重试", async () => { await runRetry(ganttDetail.run.id); setGanttDetail(await runGet(ganttDetail.run.id)); })}>
+                            重试（第 2 轮）
+                          </button>
+                        )}
+                        {ganttDetail.run.status === "review" && (
+                          <>
+                            <button disabled={!!busy} onClick={() => act("仲裁放行", async () => { await runArbitrate(ganttDetail.run.id, "resume", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>
+                              仲裁放行
+                            </button>
+                            <button disabled={!!busy} onClick={() => act("仲裁失败", async () => { await runArbitrate(ganttDetail.run.id, "fail", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>
+                              仲裁失败
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {(() => {
+                    const pending = ganttDetail.gates.filter((g) => g.decidedAt === null);
+                    if (!pending.length) return null;
+                    const reasonZh: Record<string, string> = {
+                      anomaly_review: "异常清单审核", pause: "暂停确认", takeover: "人工接管确认",
+                      acceptance: "验收确认",
+                    };
+                    return (
+                      <div className="stack gantt-action-box" data-testid="gate-approve-box">
+                        <h3>待你处理 · {pending.length} 个人工门</h3>
+                        <p className="sub-row">危险操作（退款 / 补发 / 补偿）必须在这里由人确认；批准或驳回后，流程才会继续。</p>
+                        {pending.map((g) => (
+                          <div className="gate-card" key={g.id} data-gate-id={g.id}>
+                            <div className="row">
+                              <strong>{reasonZh[g.reason] ?? g.reason}</strong>
+                              <span className="ver">步骤 {g.stepId}</span>
+                            </div>
+                            <p className="sub-row">{g.prompt}</p>
+                            <div className="row actions">
+                              <button disabled={!!busy} data-gate-action="approve"
+                                onClick={() => act("批准", async () => { await gateDecide(g.id, "approve", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>批准通过</button>
+                              <button disabled={!!busy} data-gate-action="reject"
+                                onClick={() => act("驳回", async () => { await gateDecide(g.id, "reject", arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>驳回</button>
+                            </div>
+                          </div>
+                        ))}
+                        <label className="stack">批准 / 驳回说明（可选，留痕）
+                          <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
+                        </label>
+                      </div>
+                    );
+                  })()}
+                  {!["done", "failed", "cancelled"].includes(ganttDetail.run.status) && (
+                    <div className="stack gantt-action-box" data-testid="control-box">
+                      <h3>人工干预（保留上下文）</h3>
+                      <p className="sub-row">接管把当前步交给人工；改路径只改本次 run 的剩余节点。暂停 / 恢复只放行「暂停门」，不绕过真实人工门——真实人工门请在上方批准。</p>
+                      <label className="stack">改路径目标节点 id（当前步骤见上方步骤列表）
+                        <input value={pathTarget} onChange={(e) => setPathTarget(e.target.value)} placeholder="如 n3" />
+                      </label>
+                      <div className="row actions">
+                        {["running", "pending"].includes(ganttDetail.run.status) && (
+                          <button disabled={!!busy} onClick={() => act("暂停", async () => { await runControl(ganttDetail.run.id, "pause"); setGanttDetail(await runGet(ganttDetail.run.id)); })}>暂停</button>
+                        )}
+                        {ganttDetail.run.status === "wait_human" &&
+                          (() => {
+                            const pending = ganttDetail.gates.filter((g) => g.decidedAt === null);
+                            const onlyPause = pending.length === 0 || pending.every((g) => g.reason === "pause");
+                            return onlyPause ? (
+                              <button disabled={!!busy} onClick={() => act("恢复", async () => { await runControl(ganttDetail.run.id, "resume", undefined, arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>恢复（暂停门）</button>
+                            ) : (
+                              <span className="sub-row">有真实人工门待批准，「恢复」不可用——请在上方批准。</span>
+                            );
+                          })()}
+                        <button disabled={!!busy} onClick={() => act("接管", async () => { await runControl(ganttDetail.run.id, "takeover", undefined, arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>接管当前步</button>
+                        <button disabled={!!busy} onClick={() => act("改路径", async () => { await runControl(ganttDetail.run.id, "change_path", pathTarget, arbNote || undefined); setGanttDetail(await runGet(ganttDetail.run.id)); })}>改路径</button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </section>
@@ -455,6 +602,53 @@ export default function App() {
 
           {tab === "stats" && (
           <>
+          <section className="card">
+            <div className="history-tabs" role="tablist" aria-label="历史分析">
+              <button className={historySub === "query" ? "tab on" : "tab"} onClick={() => setHistorySub("query")}>历史查询</button>
+              <button className={historySub === "stats" ? "tab on" : "tab"} onClick={() => setHistorySub("stats")}>历史统计</button>
+            </div>
+          </section>
+
+          {historySub === "query" ? (
+          <section className="card" data-testid="history-query">
+            <h2>历史查询</h2>
+            <div className="row history-filters">
+              <label>起<input type="date" value={historyFrom} onChange={(e) => setHistoryFrom(e.target.value)} /></label>
+              <label>止<input type="date" value={historyTo} onChange={(e) => setHistoryTo(e.target.value)} /></label>
+              <label>SOP
+                <select value={historySop} onChange={(e) => setHistorySop(e.target.value)}>
+                  <option value="">全部</option>
+                  {data.sops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </label>
+              <label>状态
+                <select value={historyStatus} onChange={(e) => setHistoryStatus(e.target.value)}>
+                  <option value="">全部</option>
+                  {Object.entries(STATUS_ZH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </label>
+            </div>
+            <p className="sub-row">共 {historyRuns.length} 条记录（按开始日期）</p>
+            {historyRuns.length === 0 ? (
+              <p className="empty">没有符合条件的记录。</p>
+            ) : (
+              <ul className="list">
+                {historyRuns.map((r) => (
+                  <li key={r.id} data-testid="history-run">
+                    <div className="row">
+                      <strong>{STATUS_ZH[r.status] ?? r.status}</strong>
+                      <span className="ver">{r.sopId}</span>
+                      <span>{dayStr(r.startedAt ?? 0)}</span>
+                    </div>
+                    <div className="row actions">
+                      <button onClick={() => focusRun(r.id)}>查看甘特图</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          ) : (
           <section className="card" data-testid="board-summary">
             <h2>完成度看板</h2>
             <div className="row board-periods">
@@ -500,133 +694,10 @@ export default function App() {
             <p className="sub-row" style={{ marginTop: 10 }}>{data.board.scopeNote}</p>
             </details>
           </section>
+          )}
           </>
           )}
 
-          {detail && (
-            <>
-            <div className="drawer-scrim" onClick={() => { setDetail(null); detailRunIdRef.current = null; }} data-drawer-scrim="1" />
-            <aside className="run-drawer" data-testid="run-detail" ref={detailRef}>
-              <div className="row drawer-head">
-                <h2>运行详情</h2>
-                <button className="close" onClick={() => { setDetail(null); detailRunIdRef.current = null; }}>关闭 ✕</button>
-              </div>
-              <p className="sub-row">{detail.run.id} · {STATUS_ZH[detail.run.status] ?? detail.run.status}</p>
-              <RunGantt detail={detail} />
-              <details className="steps-fold">
-                <summary>步骤明细（{detail.steps.length}）</summary>
-                <ol className="steps">
-                  {detail.steps.map((s) => (
-                    <li key={s.id} data-testid="step-item">
-                      <strong>{s.nodeType}</strong> — {s.status}
-                      {s.toolRef && <span className="ver"> · {s.toolRef}</span>}
-                      {s.outputJson && <pre>{s.outputJson}</pre>}
-                    </li>
-                  ))}
-                </ol>
-              </details>
-              <h3>验收</h3>
-              <ul className="list">
-                {detail.acceptance.map((a) => (
-                  <li key={a.id}>{a.passed ? "✓" : "✗"} {a.criterion}</li>
-                ))}
-                {detail.acceptance.length === 0 && <li className="empty">无验收项</li>}
-              </ul>
-              {(detail.run.status === "rejected" || detail.run.status === "review") && (
-                <div className="stack" data-testid="arbitration-box">
-                  <label className="stack">
-                    仲裁/重试说明（可选，留痕）
-                    <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
-                  </label>
-                  <div className="row actions">
-                    {detail.run.status === "rejected" && (
-                      <button disabled={!!busy} onClick={() => act("重试", async () => { await runRetry(detail.run.id); setDetail(await runGet(detail.run.id)); })}>
-                        重试（第 2 轮）
-                      </button>
-                    )}
-                    {detail.run.status === "review" && (
-                      <>
-                        <button disabled={!!busy} onClick={() => act("仲裁放行", async () => { await runArbitrate(detail.run.id, "resume", arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>
-                          仲裁放行
-                        </button>
-                        <button disabled={!!busy} onClick={() => act("仲裁失败", async () => { await runArbitrate(detail.run.id, "fail", arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>
-                          仲裁失败
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-              {/* 待裁决人工门：在详情里直接批准/驳回，不必跳到「人工待办」翻找。 */}
-              {(() => {
-                const pending = detail.gates.filter((g) => g.decidedAt === null);
-                if (!pending.length) return null;
-                const reasonZh: Record<string, string> = {
-                  anomaly_review: "异常清单审核", pause: "暂停确认", takeover: "人工接管确认",
-                  acceptance: "验收确认",
-                };
-                return (
-                  <div className="stack" data-testid="gate-approve-box">
-                    <h3>待你处理 · {pending.length} 个人工门</h3>
-                    <p className="sub-row">危险操作（退款 / 补发 / 补偿）必须在这里由人确认；批准或驳回后，流程才会继续。</p>
-                    {pending.map((g) => (
-                      <div className="gate-card" key={g.id} data-gate-id={g.id}>
-                        <div className="row">
-                          <strong>{reasonZh[g.reason] ?? g.reason}</strong>
-                          <span className="ver">步骤 {g.stepId}</span>
-                        </div>
-                        <p className="sub-row">{g.prompt}</p>
-                        <div className="row actions">
-                          <button disabled={!!busy} data-gate-action="approve"
-                            onClick={() => act("批准", async () => {
-                              await gateDecide(g.id, "approve", arbNote || undefined);
-                              setDetail(await runGet(detail.run.id));
-                            })}>批准通过</button>
-                          <button disabled={!!busy} data-gate-action="reject"
-                            onClick={() => act("驳回", async () => {
-                              await gateDecide(g.id, "reject", arbNote || undefined);
-                              setDetail(await runGet(detail.run.id));
-                            })}>驳回</button>
-                        </div>
-                      </div>
-                    ))}
-                    <label className="stack">
-                      批准 / 驳回说明（可选，留痕）
-                      <input value={arbNote} onChange={(e) => setArbNote(e.target.value)} placeholder="写明理由" />
-                    </label>
-                  </div>
-                );
-              })()}
-              {!["done", "failed", "cancelled"].includes(detail.run.status) && (
-                <div className="stack" data-testid="control-box">
-                  <h3>人工干预（保留上下文）</h3>
-                  <p className="sub-row">接管把当前步交给人工；改路径只改本次 run 的剩余节点。暂停 / 恢复只放行「暂停门」，不绕过真实人工门——真实人工门请在上方批准。</p>
-                  <label className="stack">
-                    改路径目标节点 id（当前步骤见上方步骤列表）
-                    <input value={pathTarget} onChange={(e) => setPathTarget(e.target.value)} placeholder="如 n3" />
-                  </label>
-                  <div className="row actions">
-                    {["running", "pending"].includes(detail.run.status) && (
-                      <button disabled={!!busy} onClick={() => act("暂停", async () => { await runControl(detail.run.id, "pause"); setDetail(await runGet(detail.run.id)); })}>暂停</button>
-                    )}
-                    {detail.run.status === "wait_human" &&
-                      (() => {
-                        const pending = detail.gates.filter((g) => g.decidedAt === null);
-                        const onlyPause = pending.length === 0 || pending.every((g) => g.reason === "pause");
-                        return onlyPause ? (
-                          <button disabled={!!busy} onClick={() => act("恢复", async () => { await runControl(detail.run.id, "resume", undefined, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>恢复（暂停门）</button>
-                        ) : (
-                          <span className="sub-row">有真实人工门待批准，「恢复」不可用——请在上方批准。</span>
-                        );
-                      })()}
-                    <button disabled={!!busy} onClick={() => act("接管", async () => { await runControl(detail.run.id, "takeover", undefined, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>接管当前步</button>
-                    <button disabled={!!busy} onClick={() => act("改路径", async () => { await runControl(detail.run.id, "change_path", pathTarget, arbNote || undefined); setDetail(await runGet(detail.run.id)); })}>改路径</button>
-                  </div>
-                </div>
-              )}
-            </aside>
-            </>
-          )}
         </>
       )}
       </>
