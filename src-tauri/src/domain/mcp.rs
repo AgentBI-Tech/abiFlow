@@ -142,6 +142,46 @@ impl Drop for StdioTransport {
     }
 }
 
+// ---- 进程内传输（内置 server：filesystem / shell）----
+
+/// 在 Rust 进程内处理 JSON-RPC，不走子进程。用于内置 MCP server（domain/builtin_mcp.rs）。
+/// 走同一个 McpClient 握手/发现/调用流程，只是 send 直接分派到内置实现。
+pub struct InProcessTransport {
+    server_id: String,
+    app_data_dir: std::path::PathBuf,
+}
+
+impl InProcessTransport {
+    pub fn new(server_id: &str, app_data_dir: std::path::PathBuf) -> Self {
+        Self { server_id: server_id.to_string(), app_data_dir }
+    }
+}
+
+impl McpTransport for InProcessTransport {
+    fn send(&mut self, msg: &Value, is_notification: bool) -> AppResult<Value> {
+        let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let id = msg.get("id").cloned().unwrap_or(Value::Null);
+        // notification（如 initialized）无需响应。
+        if is_notification { return Ok(Value::Null); }
+        let params = msg.get("params").cloned().unwrap_or(json!({}));
+        let result = match method {
+            "initialize" => json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": self.server_id, "version": "0.1.0" }
+            }),
+            "tools/list" => crate::domain::builtin_mcp::tools_list(&self.server_id)?,
+            "tools/call" => {
+                let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                crate::domain::builtin_mcp::tools_call(&self.server_id, name, &args, &self.app_data_dir)?
+            }
+            other => return Err(AppError::McpUnavailable(format!("内置 server 不支持方法：{}", other))),
+        };
+        Ok(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+    }
+}
+
 // ---- HTTP 传输 ----
 
 pub struct HttpTransport {
@@ -312,5 +352,29 @@ mod tests {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+
+    #[test]
+    fn in_process_transport_filesystem_roundtrip() {
+        let root = std::env::temp_dir().join("abiflow-inproc-fs-test");
+        let _ = std::fs::create_dir_all(&root);
+        // InProcessTransport 的 app_data_dir 参数是"data_dir"，fs_root = data_dir/abiflow/builtin-fs。
+        let data_dir = root.clone();
+        let fs_root = crate::domain::builtin_mcp::fs_root(&data_dir);
+        let _ = std::fs::create_dir_all(&fs_root);
+        std::fs::write(fs_root.join("hello.txt"), "hello-inproc").unwrap();
+
+        let mut client = McpClient::new(InProcessTransport::new(
+            crate::domain::builtin_mcp::FS_SERVER, data_dir.clone(),
+        ));
+        client.initialize().unwrap();
+        let tools = client.list_tools().unwrap();
+        assert!(tools.iter().any(|t| t["name"] == "read_file"));
+        let res = client.call_tool("read_file", &json!({"path":"hello.txt"})).unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text, "hello-inproc");
+        // 路径穿越被拒（InProcessTransport 会把 InvalidInput 作为 JSON-RPC error 抛出）
+        assert!(client.call_tool("read_file", &json!({"path":"../secret"})).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

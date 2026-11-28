@@ -46,6 +46,9 @@ pub struct McpServers {
     pub servers: Vec<McpServer>,
 }
 
+/// 应用数据目录（供内置 MCP server 的 sandbox 根使用）。
+pub fn data_dir() -> AppResult<PathBuf> { dir() }
+
 fn dir() -> AppResult<PathBuf> {
     // 单测无 AppHandle：用系统临时目录下固定子目录，避免污染全局路径。
     #[cfg(test)]

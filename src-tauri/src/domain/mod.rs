@@ -2,6 +2,7 @@
 pub mod audit;
 pub mod board;
 pub mod circuit_breaker;
+pub mod builtin_mcp;
 pub mod cron;
 pub mod event_bus;
 pub mod examples;

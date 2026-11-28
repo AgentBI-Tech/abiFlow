@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use crate::domain::executor::ToolRunner;
 use crate::domain::keystore::KeyStore;
-use crate::domain::mcp::{HttpTransport, McpClient, StdioTransport};
+use crate::domain::mcp::{HttpTransport, InProcessTransport, McpClient, StdioTransport};
 use crate::infra::app_config;
 use crate::models::{AppError, AppResult};
 
@@ -110,14 +110,38 @@ fn run_mcp(args: &Value, scope: &Value, ks: &dyn KeyStore) -> AppResult<Value> {
         .ok_or_else(|| AppError::InvalidInput("MCP 工具缺 server 配置".into()))?;
     let tool_name = scope.get("tool").and_then(|v| v.as_str())
         .ok_or_else(|| AppError::InvalidInput("MCP 工具缺 tool 配置".into()))?;
-    let servers = app_config::mcp_list()?;
-    let server = servers.into_iter().find(|s| s.id == server_id)
-        .ok_or_else(|| AppError::McpUnavailable(format!("MCP server 未配置：{}", server_id)))?;
+    // 内置 server 不需要手工写 mcp_servers.json：按 id 识别，动态构造配置。
+    let builtin = matches!(server_id,
+        crate::domain::builtin_mcp::FS_SERVER |
+        crate::domain::builtin_mcp::SHELL_SERVER | "builtin-browser");
+    let server = if builtin {
+        // browser 走 stdio 子进程：node + 内置脚本（脚本随应用源码放 tests/fixtures，
+        // 打包后位于 resources/builtin_browser_mcp.mjs；路径由 ABIFLOW_BROWSER_SCRIPT 覆盖）。
+        let browser_script = std::env::var("ABIFLOW_BROWSER_SCRIPT")
+            .unwrap_or_else(|_| "tests/fixtures/builtin_browser_mcp.mjs".into());
+        app_config::McpServer {
+            id: server_id.to_string(),
+            command: if server_id == "builtin-browser" { "node".into() } else { String::new() },
+            args: if server_id == "builtin-browser" { vec![browser_script] } else { vec![] },
+            note: "内置 server".into(),
+            transport: if server_id == "builtin-browser" { "stdio".into() } else { "in-process".into() },
+            url: String::new(), env: vec![],
+        }
+    } else {
+        let servers = app_config::mcp_list()?;
+        servers.into_iter().find(|s| s.id == server_id)
+            .ok_or_else(|| AppError::McpUnavailable(format!("MCP server 未配置：{}", server_id)))?
+    };
 
     // 解析 args 里的占位符（密钥只从 keystore 取、不回显）。
     let safe_args = resolve_value(args, args, ks)?;
 
-    let result = if server.transport == "http" {
+    let result = if server.transport == "in-process" {
+        // 内置 server（filesystem / shell）：Rust 进程内处理 JSON-RPC，不走子进程。
+        let mut client = McpClient::new(InProcessTransport::new(server_id, app_config::data_dir()?));
+        client.initialize()?;
+        client.call_tool(tool_name, &safe_args)?
+    } else if server.transport == "http" {
         if server.url.is_empty() {
             return Err(AppError::McpUnavailable("MCP http server 缺 url".into()));
         }

@@ -276,6 +276,10 @@ export function sopUpsert(p: {
 export function sopDelete(id: string): Promise<number> {
   return invoke("sop_delete", { id });
 }
+/** 幂等安装内置 MCP server 工具组（filesystem / shell / browser）。 */
+export function builtinToolsInstall(): Promise<string[]> {
+  return invoke("builtin_tools_install", {});
+}
 export function toolList(role: string, mode: string): Promise<ToolRow[]> {
   return invoke("tool_list", { role, mode });
 }

@@ -50,6 +50,26 @@ fn node_type_str(t: NodeType) -> &'static str {
     }
 }
 
+/// 工具结果是否要求人工介入（内置 browser 遇登录/验证码时返回 requires_human）。
+/// MCP 工具Shape 是 {content:[{type:"text",text:"...json..."}]}；文本里可能直接是 JSON。
+fn raw_requires_human(raw: &Value) -> bool {
+    if raw.get("requires_human").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return true;
+    }
+    let text = raw.get("content")
+        .and_then(|c| c.get(0))
+        .and_then(|x| x.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    if text.contains("\"requires_human\":true") || text.contains("\"requires_human\": true") {
+        return true;
+    }
+    if let Ok(v) = serde_json::from_str::<Value>(text) {
+        return v.get("requires_human").and_then(|b| b.as_bool()).unwrap_or(false);
+    }
+    false
+}
+
 /// 选边：优先 when 求值为真的分支，其次默认（无 when）分支。
 fn choose_next(
     def: &SopDefinition,
@@ -338,6 +358,21 @@ pub fn advance(conn: &Connection, run_id: &str, tools: &dyn ToolRunner, llm: &dy
                 store::update_step(conn, &step_id, "running", None, None)?;
                 let scope = store::tool_config(conn, tool)?;
                 let raw = tools.run(tool, &args, &scope)?;
+                // 内置 browser 等工具遇到登录/验证码时返回 requires_human → 插人工门转人工，不绕过。
+                if raw_requires_human(&raw) {
+                    let note = raw["content"][0]["text"].as_str().unwrap_or("工具要求人工介入");
+                    store::insert_gate(
+                        conn, run_id, &step_id, "requires_human", note, None,
+                    )?;
+                    store::update_step(conn, &step_id, "wait_human", None, None)?;
+                    store::update_run_status(conn, run_id, "wait_human", None, Some(note))?;
+                    store::update_run_cursor(
+                        conn, run_id, Some(&current),
+                        &serde_json::to_string(&outputs).unwrap_or_default(),
+                        &serde_json::to_string(&skipped).unwrap_or_else(|_| "[]".into()),
+                    )?;
+                    return Ok("wait_human".into());
+                }
                 let safe = redact_value(&raw);
                 let out_str = serde_json::to_string(&safe).unwrap_or_else(|_| "{}".into());
                 let in_str = serde_json::to_string(&redact_value(&args)).unwrap_or_else(|_| "{}".into());
@@ -821,6 +856,45 @@ mod tests {
         assert_eq!(store::known_tools(&c).unwrap().len(), 1);
         assert_eq!(store::list_sops(&c, false).unwrap().len(), 1);
         assert_eq!(store::dashboard(&c).unwrap().schedules.len(), 1);
+    }
+
+    // 内置 browser 遇登录/验证码 → 工具返回 requires_human → 插人工门、run 转 wait_human。
+    #[test]
+    fn requires_human_tool_inserts_gate_and_waits() {
+        struct HumanTool;
+        impl ToolRunner for HumanTool {
+            fn run(&self, tool: &str, _args: &Value, _scope: &Value) -> AppResult<Value> {
+                assert_eq!(tool, "builtin:browser-navigate");
+                Ok(json!({"content":[{"type":"text","text":
+                    "{\"requires_human\":true,\"reason\":\"login\",\"note\":\"需人工登录\"}"}]}))
+            }
+        }
+        let c = setup();
+        let def = json!({
+            "version":1,
+            "nodes":[
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"mcp_tool","config":{"tool":"builtin:browser-navigate","args":{"url":"https://x"}}},
+                {"id":"n2","type":"end","config":{}}
+            ],
+            "edges":[{"from":"n0","to":"n1"},{"from":"n1","to":"n2"}]
+        });
+        let p = crate::models::SopUpsertPayload {
+            id: Some("sop-human".into()), name: "转人工".into(),
+            trigger_json: "{}".into(), risk: "low".into(), owner_policy: "agent".into(),
+            definition: def, expect_version: None,
+        };
+        store::upsert_sop(&c, &p).unwrap();
+        // 注册工具（gateway 需已知工具才能放行）
+        store::upsert_tool(&c, "builtin:browser-navigate", "builtin-browser", "mcp", "内置浏览器", "low",
+            &json!({"kind":"mcp","server":"builtin-browser","tool":"navigate","read_only":true,"plane":"public"}).to_string(), true).unwrap();
+        store::upsert_tool_grant(&c, "builtin:browser-navigate", Mode::Build, true, &["public".into()]).unwrap();
+
+        let run_id = start_run(&c, "sop-human", "build", "manual", &json!({}), &HumanTool, &MockProvider).unwrap();
+        let run = store::get_run(&c, &run_id).unwrap();
+        assert_eq!(run.status, "wait_human");
+        let gates = store::list_gates(&c, true).unwrap();
+        assert!(gates.iter().any(|g| g.reason == "requires_human"), "应插入 requires_human 门");
     }
 
     #[test]

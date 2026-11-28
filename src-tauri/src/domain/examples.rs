@@ -296,6 +296,55 @@ pub fn install_shopify_readonly(conn: &rusqlite::Connection) -> AppResult<Vec<St
     Ok(ids)
 }
 
+/// 内置 MCP server 工具组（2026-11-28）：filesystem / shell / browser。
+/// 幂等注册；gateway 授权面 = public，工具标 read_only（browser 交互也不写真店）。
+pub fn install_builtin_tools(conn: &rusqlite::Connection) -> AppResult<Vec<String>> {
+    use crate::domain::builtin_mcp::{FS_SERVER, SHELL_SERVER};
+    let defs: Vec<ToolDefPayload> = vec![
+        ToolDefPayload {
+            id: "builtin:fs-read".into(), title: "内置文件读取（sandbox）".into(),
+            risk: "low".into(), server: FS_SERVER.into(), command: "mcp".into(),
+            scope: json!({"kind":"mcp","server":FS_SERVER,"tool":"read_file","read_only":true,"plane":"public"}),
+            enabled: true,
+        },
+        ToolDefPayload {
+            id: "builtin:fs-list".into(), title: "内置目录列表（sandbox）".into(),
+            risk: "low".into(), server: FS_SERVER.into(), command: "mcp".into(),
+            scope: json!({"kind":"mcp","server":FS_SERVER,"tool":"list_dir","read_only":true,"plane":"public"}),
+            enabled: true,
+        },
+        ToolDefPayload {
+            id: "builtin:shell-run".into(), title: "内置只读命令（白名单）".into(),
+            risk: "low".into(), server: SHELL_SERVER.into(), command: "mcp".into(),
+            scope: json!({"kind":"mcp","server":SHELL_SERVER,"tool":"run","read_only":true,"plane":"public"}),
+            enabled: true,
+        },
+        ToolDefPayload {
+            id: "builtin:browser-navigate".into(), title: "内置浏览器·打开页面".into(),
+            risk: "low".into(), server: "builtin-browser".into(), command: "mcp".into(),
+            scope: json!({"kind":"mcp","server":"builtin-browser","tool":"navigate","read_only":true,"plane":"public"}),
+            enabled: true,
+        },
+        ToolDefPayload {
+            id: "builtin:browser-snapshot".into(), title: "内置浏览器·页面快照（含转人工判定）".into(),
+            risk: "low".into(), server: "builtin-browser".into(), command: "mcp".into(),
+            scope: json!({"kind":"mcp","server":"builtin-browser","tool":"snapshot","read_only":true,"plane":"public"}),
+            enabled: true,
+        },
+    ];
+    let mut ids = Vec::new();
+    for t in defs {
+        let scope = serde_json::to_string(&t.scope)
+            .map_err(|e| crate::models::AppError::InvalidInput(e.to_string()))?;
+        store::upsert_tool(conn, &t.id, &t.server, &t.command, &t.title, &t.risk, &scope, t.enabled)?;
+        for m in [Mode::Plan, Mode::Build, Mode::Review] {
+            store::upsert_tool_grant(conn, &t.id, m, true, &["public".into()])?;
+        }
+        ids.push(t.id);
+    }
+    Ok(ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

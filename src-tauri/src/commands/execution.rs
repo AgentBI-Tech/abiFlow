@@ -686,6 +686,13 @@ pub fn shopify_tools_install(app: tauri::AppHandle) -> AppResult<Vec<String>> {
     examples::install_shopify_readonly(&conn)
 }
 
+/// 幂等安装内置 MCP server 工具组（filesystem / shell / browser）。
+#[tauri::command]
+pub fn builtin_tools_install(app: tauri::AppHandle) -> AppResult<Vec<String>> {
+    let conn = open_db(&app)?;
+    examples::install_builtin_tools(&conn)
+}
+
 /// 安装放权演示 SOP（human-owned agent_step，本地 Mock，无外部依赖）。
 #[tauri::command]
 pub fn delegation_demo_install(app: tauri::AppHandle) -> AppResult<String> {

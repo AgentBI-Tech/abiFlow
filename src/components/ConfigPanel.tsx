@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import {
   configGet, configSet, mcpServerList, mcpServerAdd, mcpServerRemove, secretsEnvPath,
+  builtinToolsInstall,
   errMessage,
   type McpServerInfo,
 } from "../lib/ipc";
@@ -65,6 +66,15 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
     finally { setBusy(""); }
   };
 
+  const installBuiltin = async () => {
+    setBusy("install-builtin");
+    try {
+      const ids = await builtinToolsInstall();
+      onError(`已安装 ${ids.length} 个内置工具：${ids.join("、")}`);
+    } catch (e) { onError(errMessage(e)); }
+    finally { setBusy(""); }
+  };
+
   const llmKeys = ["llm.provider", "llm.host", "llm.model"];
 
   return (
@@ -97,6 +107,15 @@ export default function ConfigPanel({ onError }: { onError: (s: string) => void 
 
       <section className="card">
         <h2>MCP server 配置 <span className="count">{servers.length}</span></h2>
+        <div className="row actions">
+          <button data-testid="builtin-tools-install" disabled={!!busy} onClick={installBuiltin}>
+            {busy === "install-builtin" ? "安装中…" : "安装内置工具（filesystem / shell / browser）"}
+          </button>
+        </div>
+        <p className="sub-row">
+          内置 server 无需手工配置 mcp_servers.json；filesystem 限 sandbox 目录、shell 走只读白名单，
+          browser 遇登录/验证码插人工门转人工（不绕过）。
+        </p>
         <p className="sub-row">
           执行器会按此配置真连 MCP server（写 mcp_servers.json）。stdio 可填要透传的<strong>环境变量名</strong>；
           值请自己写进 secrets.env：<code>{secretsPath || "（启动后可见）"}</code>（600 权限，不进配置/日志/git）。
