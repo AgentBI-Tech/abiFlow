@@ -272,6 +272,10 @@ export function sopUpsert(p: {
 }): Promise<{ id: string; version: number }> {
   return invoke("sop_upsert", { payload: p });
 }
+/** 硬删除 SOP（不可逆）；后端会检查 run 引用，有引用则拒绝。 */
+export function sopDelete(id: string): Promise<number> {
+  return invoke("sop_delete", { id });
+}
 export function toolList(role: string, mode: string): Promise<ToolRow[]> {
   return invoke("tool_list", { role, mode });
 }

@@ -688,6 +688,30 @@ label { font-size: 12px; color: var(--text-dim); @apply inline-flex flex-col; ga
 }
 .sop-handle { background: var(--text-dim) !important; width: 8px; height: 8px; }
 
+/* 画布模式按钮：选中态强对比（2026-11-28） */
+button.tab.canvas-mode { padding: 8px 18px; font-weight: 600; border: 1px solid var(--border); }
+button.tab.canvas-mode.on {
+  background: var(--brand); color: #fff; border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand-soft); font-weight: 700;
+}
+/* 编辑器模式标识 / 未保存提示 */
+.edit-mode-badge {
+  display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px;
+  background: var(--brand-soft); color: var(--brand-deep); font-weight: 700; font-size: var(--fs-sm);
+}
+.dirty-badge {
+  display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px;
+  background: var(--warn-soft, #f59e0b22); color: var(--warn-deep, #b45309); font-size: var(--fs-sm);
+}
+button.save-dirty { border-color: var(--warn, #f59e0b); box-shadow: 0 0 0 2px var(--warn-soft, #f59e0b22); }
+/* 新建 / 删除 SOP 弹窗 */
+.sop-dialog {
+  padding: 12px 14px; margin: 8px 0; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--panel);
+}
+.sop-dialog.danger { border-color: var(--danger, #dc2626); }
+.sop-dialog p { margin: 0 0 8px; color: var(--text-dim); }
+
 /* ---- pill 下钻任务列表 / 历史分析 / 甘特图页内详情（2026-11-27）---- */
 .stat-pill { cursor: pointer; }
 .stat-pill:hover { background: var(--brand-soft); }

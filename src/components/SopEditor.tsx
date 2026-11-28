@@ -1,7 +1,8 @@
 // 完整 SOP 编辑器（ReactFlow）：把 AST（definition）渲染成可编辑画布，
 // 支持增删节点、连线、按类型改 config、编辑条件分支，保存回 AST 走 sop_upsert（含后端校验）。
-// AST 本身不含坐标，布局用 BFS 蛇形自动算；节点带显式 style 宽高——实测 WebKitGTK 下
-// 缺尺寸会让 fitView 把节点缩到不可见（11-20 白屏），显式尺寸后 13.0.2 渲染正常。
+// AST 节点可选带 position（2026-11-28：保存节点排列）。有则用之，无则 BFS 蛇形自动算
+// （兼容老 SOP）。坐标随 sopUpsert 落库；后端 definition 原样存 JSON、executor 忽略未知字段，不影响运行。
+// 节点带显式 style 宽高——实测 WebKitGTK 下缺尺寸会让 fitView 把节点缩到不可见（11-20 白屏）。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -22,7 +23,7 @@ import "@xyflow/react/dist/style.css";
 
 import { sopGet, sopUpsert, type SopRow, type SopVersionInfo } from "../lib/ipc";
 
-type AstNode = { id: string; type: string; config?: Record<string, unknown> };
+type AstNode = { id: string; type: string; config?: Record<string, unknown>; position?: { x: number; y: number } };
 type AstEdge = { from: string; to: string; when?: string };
 type AstDef = { version?: number; nodes: AstNode[]; edges: AstEdge[] };
 
@@ -55,7 +56,7 @@ function nodeDetail(n: AstNode): string {
 }
 function clip(s: string, n: number) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
-/** AST → ReactFlow nodes/edges。BFS 定序 + 蛇形网格；节点显式尺寸。 */
+/** AST → ReactFlow nodes/edges。节点带 position 则用之，否则 BFS 定序 + 蛇形网格；节点显式尺寸。 */
 function astToFlow(def: AstDef): { nodes: Node[]; edges: Edge[] } {
   const byId = new Map(def.nodes.map((n) => [n.id, n]));
   const out = new Map<string, AstEdge[]>();
@@ -88,7 +89,8 @@ function astToFlow(def: AstDef): { nodes: Node[]; edges: Edge[] } {
   });
   const nodes: Node[] = def.nodes.map((n) => ({
     id: n.id,
-    position: pos.get(n.id) ?? { x: PAD, y: PAD },
+    // 已保存的排列优先；老 SOP 没有 position 时才回退到 BFS 算出的坐标。
+    position: n.position ?? pos.get(n.id) ?? { x: PAD, y: PAD },
     data: {
       label: TYPE_LABEL[n.type] ?? n.type,
       detail: clip(nodeDetail(n), 18),
@@ -125,6 +127,8 @@ function flowToAst(nodes: Node[], edges: Edge[], version: number): AstDef {
         id: n.id,
         type: String((n.data as Record<string, unknown>).nodeType ?? "agent_step"),
         config: fixed,
+        // 保存节点排列；老 SOP 没拖动过也会带上 BFS 初始坐标，无害。
+        position: { x: n.position.x, y: n.position.y },
       };
     }),
     edges: edges.map((e) => {
@@ -163,6 +167,8 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
   const [selNode, setSelNode] = useState<string | null>(null);
   const [selEdge, setSelEdge] = useState<string | null>(null);
   const [versions, setVersions] = useState<SopVersionInfo[]>([]);
+  // 有未保存改动（拖动节点 / 改配置 / 改名 / 增删）。保存或切 SOP 后清除。
+  const [dirty, setDirty] = useState(false);
 
   const initial = useMemo(() => {
     let def: AstDef;
@@ -185,6 +191,8 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
   }, [initial]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges);
+  // 拖动结束标 dirty（其余编辑在各 handler 显式标）。ReactFlow 的 onNodesChange 签名随版本变化，
+  // 不包装它，改用专用回调 onNodeDragStop，避免版本耦合。
 
   // 切换 SOP 时重载
   useEffect(() => {
@@ -195,18 +203,19 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
     }));
     setEdges(es);
     setSelNode(null); setSelEdge(null);
-    setName(sop.name); setErr("");
+    setName(sop.name); setErr(""); setDirty(false);
     // 版本历史（sop_get）：只读展示，可瞻仰"那次是哪版流程跑的"。
     void sopGet(sop.id).then((d) => setVersions(d.versions)).catch(() => setVersions([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sop.id, sop.definition]);
 
   const onConnect = useCallback(
-    (c: Connection) => setEdges((eds) => addEdge({ ...c, id: `e-${c.source}-${c.target}-${Date.now()}` }, eds)),
+    (c: Connection) => { setDirty(true); setEdges((eds) => addEdge({ ...c, id: `e-${c.source}-${c.target}-${Date.now()}` }, eds)); },
     [setEdges]
   );
 
   function addNode(type: string) {
+    setDirty(true);
     const id = `n${Date.now().toString(36).slice(-5)}`;
     const cfg: Record<string, unknown> =
       type === "mcp_tool" ? { tool: "" } :
@@ -227,6 +236,8 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
   }
 
   function removeSelected() {
+    if (!selNode && !selEdge) return;
+    setDirty(true);
     if (selNode) {
       setNodes((ns) => ns.filter((n) => n.id !== selNode));
       setEdges((es) => es.filter((e) => e.source !== selNode && e.target !== selNode));
@@ -242,6 +253,7 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
 
   function patchCfg(patch: Record<string, unknown>) {
     if (!selNodeObj) return;
+    setDirty(true);
     setNodes((ns) => ns.map((n) =>
       n.id === selNodeObj.id
         ? { ...n, data: { ...(n.data as object), cfg: { ...((n.data as Record<string, unknown>).cfg as object ?? {}), ...patch } } }
@@ -268,6 +280,7 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
         definition: def as unknown as Record<string, unknown>,
         expectVersion: sop.version,
       });
+      setDirty(false);
       onSaved?.();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -278,10 +291,14 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
 
   return (
     <div className="stack" data-testid="sop-editor">
+      <div className="row actions" data-testid="editor-mode">
+        <span className="edit-mode-badge">编辑中</span>
+        {dirty && <span className="dirty-badge" data-testid="dirty-badge">有未保存改动</span>}
+      </div>
       <div className="row actions">
-        <label className="row">名称 <input value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label className="row">名称 <input value={name} onChange={(e) => { setName(e.target.value); setDirty(true); }} /></label>
         <button onClick={removeSelected} disabled={(!selNode && !selEdge) || saving}>删除选中</button>
-        <button onClick={save} disabled={saving}>{saving ? "保存中…" : "保存 SOP"}</button>
+        <button onClick={save} disabled={saving} className={dirty ? "save-dirty" : ""}>{saving ? "保存中…" : "保存 SOP"}</button>
       </div>
       <div className="row actions" data-testid="add-node-bar">
         <span className="sub-row">添加节点：</span>
@@ -299,6 +316,7 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            onNodeDragStop={() => setDirty(true)}
             onConnect={onConnect}
             onNodeClick={(_, n) => { setSelNode(n.id); setSelEdge(null); }}
             onEdgeClick={(_, e) => { setSelEdge(e.id); setSelNode(null); }}
@@ -327,6 +345,7 @@ export default function SopEditor({ sop, onSaved }: { sop: SopRow; onSaved?: () 
                   value={String((selEdgeObj.data as Record<string, unknown> | undefined)?.when ?? "")}
                   onChange={(e) => {
                     const v = e.target.value;
+                    setDirty(true);
                     setEdges((es) => es.map((x) => x.id === selEdgeObj.id ? { ...x, data: { when: v }, label: v ? clip(v, 14) : undefined } : x));
                   }}
                 />

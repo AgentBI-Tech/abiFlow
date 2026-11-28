@@ -59,6 +59,13 @@ pub fn sop_upsert(
     Ok(SopUpsertResult { id, version })
 }
 
+/// 硬删除 SOP（不可逆）。前端须先让用户精确输入名称确认；后端再守一道 run 引用检查。
+#[tauri::command]
+pub fn sop_delete(app: tauri::AppHandle, id: String) -> AppResult<usize> {
+    let conn = open_db(&app)?;
+    store::delete_sop(&conn, &id)
+}
+
 /// 取 SOP 定义 + 版本历史（历史来自 run 快照；sops 表原地升版本无历史行）。
 #[tauri::command]
 pub fn sop_get(app: tauri::AppHandle, id: String) -> AppResult<SopDetail> {

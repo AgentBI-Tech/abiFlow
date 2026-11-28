@@ -159,6 +159,38 @@ pub fn set_sop_enabled(conn: &Connection, id: &str, enabled: bool) -> AppResult<
     Ok(())
 }
 
+/// 硬删除 SOP（不可恢复）。有 run 引用则拒绝，避免留下孤儿 run；
+/// 同时删除该 SOP 的 schedule，避免后台继续调度已不存在的 SOP。
+/// 返回被清理的 schedule 行数（0 或 1）。
+pub fn delete_sop(conn: &Connection, id: &str) -> AppResult<usize> {
+    let exists: Option<i32> = conn
+        .query_row("SELECT version FROM sops WHERE id=?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    if exists.is_none() {
+        return Err(AppError::NotFound(format!("SOP {}", id)));
+    }
+    let run_count: i64 = conn
+        .query_row("SELECT count(*) FROM runs WHERE sop_id=?1", params![id], |r| r.get(0))
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    if run_count > 0 {
+        return Err(AppError::InvalidInput(format!(
+            "SOP {} 已被 {} 条运行记录引用，不能删除（可先禁用）", id, run_count
+        )));
+    }
+    // 顺序删（store 函数统一用 &Connection，不开事务）；先 schedule 后 sop。
+    let schedules = conn
+        .execute("DELETE FROM schedules WHERE sop_id=?1", params![id])
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    let deleted = conn
+        .execute("DELETE FROM sops WHERE id=?1", params![id])
+        .map_err(|e| AppError::Db(e.to_string()))?;
+    if deleted == 0 {
+        return Err(AppError::NotFound(format!("SOP {}", id)));
+    }
+    Ok(schedules)
+}
+
 /// 当前启用的工具 id 集合，供 AST 校验（§4）。
 pub fn known_tools(conn: &Connection) -> AppResult<HashSet<String>> {
     let mut stmt = conn
@@ -1355,4 +1387,54 @@ fn map_owner_decision(r: &rusqlite::Row) -> Result<crate::models::OwnerDecisionR
         decided_by: r.get(9)?,
         created_at: r.get(10)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::db;
+    use serde_json::json;
+
+    fn make_sop(conn: &Connection, id: &str) {
+        let def = json!({
+            "version": 1,
+            "nodes": [
+                {"id":"n0","type":"start","config":{}},
+                {"id":"n1","type":"agent_step","config":{"goal":"汇总"}},
+                {"id":"n2","type":"end","config":{}}
+            ],
+            "edges": [{"from":"n0","to":"n1"},{"from":"n1","to":"n2"}]
+        });
+        upsert_sop(conn, &SopUpsertPayload {
+            id: Some(id.into()), name: id.into(), trigger_json: "{}".into(),
+            risk: "low".into(), owner_policy: "hybrid".into(), definition: def, expect_version: None,
+        }).unwrap();
+    }
+
+    #[test]
+    fn delete_sop_removes_schedule() {
+        let conn = db::open_in_memory().unwrap();
+        make_sop(&conn, "sop-del-1");
+        upsert_schedule(&conn, "sop-del-1", 3600).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM schedules WHERE sop_id='sop-del-1'", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        let cleaned = delete_sop(&conn, "sop-del-1").unwrap();
+        assert_eq!(cleaned, 1);
+        assert_eq!(get_sop(&conn, "sop-del-1").is_err(), true);
+        assert_eq!(conn.query_row("SELECT count(*) FROM schedules WHERE sop_id='sop-del-1'", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn delete_sop_refuses_when_runs_reference() {
+        let conn = db::open_in_memory().unwrap();
+        make_sop(&conn, "sop-del-2");
+        insert_run(&conn, "sop-del-2", 1, "build", "manual", "{}").unwrap();
+        assert!(delete_sop(&conn, "sop-del-2").is_err());
+        assert_eq!(get_sop(&conn, "sop-del-2").is_ok(), true);
+    }
+
+    #[test]
+    fn delete_sop_missing_is_not_found() {
+        let conn = db::open_in_memory().unwrap();
+        assert!(delete_sop(&conn, "does-not-exist").is_err());
+    }
 }

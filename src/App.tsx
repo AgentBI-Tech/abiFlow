@@ -30,6 +30,8 @@ import {
   runAsAgent,
   scheduleSet,
   sopSetEnabled,
+  sopDelete,
+  sopUpsert,
   type DashboardData,
   type RunDetail,
   type RunRow,
@@ -89,6 +91,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selCanvasSop, setSelCanvasSop] = useState("");
   const [canvasMode, setCanvasMode] = useState<"read" | "edit" | "lane">("edit");
+  // 新建 / 删除 SOP 弹窗
+  const [sopDialog, setSopDialog] = useState<"" | "create" | "delete">("");
+  const [sopNameDraft, setSopNameDraft] = useState("");
+  const [sopConfirmDraft, setSopConfirmDraft] = useState("");
 
   // 运营看板：左上视图、右上按日期范围统计 + SOP 下拉选择。
   const [boardView, setBoardView] = useState<"board" | "gantt" | "lane">("board");
@@ -124,6 +130,48 @@ export default function App() {
       setErr(errMessage(e));
     }
   }, []);
+
+  // 新建 SOP：最小骨架 start → agent_step → acceptance → end，手动触发、可立即编辑。
+  async function createSop() {
+    const name = sopNameDraft.trim();
+    if (!name) return;
+    setBusy("create-sop"); setErr("");
+    try {
+      const id = `sop-${Date.now().toString(36).slice(-6)}`;
+      const def = {
+        version: 1,
+        nodes: [
+          { id: "n0", type: "start", config: {} },
+          { id: "n1", type: "agent_step", config: { goal: "汇总上游并给出建议", owner: "agent" } },
+          { id: "n2", type: "acceptance", config: { criteria: ["steps.n1.status == done"] } },
+          { id: "n3", type: "end", config: {} },
+        ],
+        edges: [
+          { from: "n0", to: "n1" }, { from: "n1", to: "n2" }, { from: "n2", to: "n3" },
+        ],
+      };
+      await sopUpsert({ id, name, triggerJson: "{}", risk: "low", ownerPolicy: "hybrid", definition: def as unknown as Record<string, unknown> });
+      await refresh();
+      setSelCanvasSop(id);
+      setCanvasMode("edit");
+      setSopDialog(""); setSopNameDraft("");
+    } catch (e) { setErr(errMessage(e)); }
+    finally { setBusy(""); }
+  }
+
+  // 删除 SOP：前端要求精确输入名称（后端再守 run 引用检查）。
+  async function deleteSop() {
+    const target = data?.sops.find((s) => s.id === selCanvasSop);
+    if (!target || sopConfirmDraft !== target.name) return;
+    setBusy("delete-sop"); setErr("");
+    try {
+      await sopDelete(target.id);
+      await refresh();
+      setSelCanvasSop("");
+      setSopDialog(""); setSopConfirmDraft("");
+    } catch (e) { setErr(errMessage(e)); }
+    finally { setBusy(""); }
+  }
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -301,10 +349,31 @@ export default function App() {
                   <option key={s.id} value={s.id}>{s.name} · v{s.version}</option>
                 ))}
               </select>
-              <button className={canvasMode === "edit" ? "tab on" : "tab"} onClick={() => setCanvasMode("edit")}>编辑</button>
-              <button className={canvasMode === "read" ? "tab on" : "tab"} onClick={() => setCanvasMode("read")}>只读</button>
-              <button className={canvasMode === "lane" ? "tab on" : "tab"} onClick={() => setCanvasMode("lane")}>泳道</button>
+              <button data-testid="canvas-mode-edit" className={`tab canvas-mode${canvasMode === "edit" ? " on" : ""}`} onClick={() => setCanvasMode("edit")}>编辑</button>
+              <button data-testid="canvas-mode-read" className={`tab canvas-mode${canvasMode === "read" ? " on" : ""}`} onClick={() => setCanvasMode("read")}>只读</button>
+              <button data-testid="canvas-mode-lane" className={`tab canvas-mode${canvasMode === "lane" ? " on" : ""}`} onClick={() => setCanvasMode("lane")}>泳道</button>
+              <button data-testid="sop-create" onClick={() => { setSopDialog("create"); setSopNameDraft(""); setErr(""); }}>+ 新建 SOP</button>
+              <button data-testid="sop-delete" disabled={!selCanvasSop} onClick={() => { setSopDialog("delete"); setSopConfirmDraft(""); setErr(""); }}>删除 SOP</button>
             </section>
+            {sopDialog === "create" && (
+              <section className="sop-dialog" data-testid="create-dialog">
+                <label className="row">SOP 名称 <input value={sopNameDraft} onChange={(e) => setSopNameDraft(e.target.value)} placeholder="例如：每日异常巡检" /></label>
+                <div className="row actions">
+                  <button onClick={createSop} disabled={!sopNameDraft.trim() || !!busy}>{busy === "create-sop" ? "创建中…" : "创建"}</button>
+                  <button onClick={() => setSopDialog("")}>取消</button>
+                </div>
+              </section>
+            )}
+            {sopDialog === "delete" && (
+              <section className="sop-dialog danger" data-testid="delete-dialog">
+                <p>删除不可恢复。请输入 SOP 名称 <strong>{data?.sops.find((s) => s.id === selCanvasSop)?.name}</strong> 确认：</p>
+                <label className="row">确认名称 <input value={sopConfirmDraft} onChange={(e) => setSopConfirmDraft(e.target.value)} /></label>
+                <div className="row actions">
+                  <button className="danger" onClick={deleteSop} disabled={sopConfirmDraft !== data?.sops.find((s) => s.id === selCanvasSop)?.name || !!busy}>{busy === "delete-sop" ? "删除中…" : "确认删除"}</button>
+                  <button onClick={() => setSopDialog("")}>取消</button>
+                </div>
+              </section>
+            )}
             {selCanvasSop ? (
               (() => {
                 const sop = data.sops.find((s) => s.id === selCanvasSop);

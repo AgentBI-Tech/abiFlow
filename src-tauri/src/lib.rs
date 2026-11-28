@@ -91,6 +91,7 @@ pub fn run() {
             commands::execution::sop_list,
             commands::execution::sop_get,
             commands::execution::sop_upsert,
+            commands::execution::sop_delete,
             commands::execution::config_get,
             commands::execution::config_set,
             commands::execution::mcp_server_list,
